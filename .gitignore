@@ -7,7 +7,7 @@ checkpoints
 results
 checkpoints_bak
 cityscapes
-test_results
+test_results/comparisons
 datasets/
 validation_samples/
 sample_visualization/

@@ -967,6 +967,7 @@ if __name__ == "__main__":
 #     --model deeplabv3_mobilenet \
 #     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
 #     --num_classes 19 \
+#     --crop_size 1024 \
 #     --test_source test \
 #     --save_results \
 #     --save_samples \
@@ -981,5 +982,6 @@ if __name__ == "__main__":
 #     --model deeplabv3_mobilenet \
 #     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
 #     --num_classes 19 \
+#     --crop_size 1024 \
 #     --test_source test \
 #     --evaluate_performance

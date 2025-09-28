@@ -1,0 +1,56 @@
+Comprehensive Test Results
+=========================
+
+Model: deeplabv3_mobilenet
+Checkpoint: ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth
+Dataset: dna2025dataset
+Test source: test
+Total images: 302
+Crop size: 1024
+
+Performance Statistics:
+-------------------------
+Parameters: 4.876 M
+FLOPs: 43.77 G
+GPU Memory: 508.51 MB
+Inference Time (mean): 16.997 ms
+Inference Time (median): 16.995 ms
+FPS (mean): 58.83
+FPS (median): 58.84
+Input Resolution: 1080x1920
+
+Accuracy Metrics:
+-----------------
+Overall Acc	 0.877
+Mean IoU	 0.416
+FreqW Acc	 0.793
+Class IoU:
+  Class 0: 0.822
+  Class 1: 0.482
+  Class 2: 0.338
+  Class 3: 0.359
+  Class 4: 0.476
+  Class 5: 0.412
+  Class 6: 0.682
+  Class 7: 0.512
+  Class 8: 0.817
+  Class 9: 0.102
+  Class 10: 0.010
+  Class 11: 0.424
+  Class 12: 0.000
+  Class 13: 0.099
+  Class 14: 0.800
+  Class 15: 0.453
+  Class 16: 0.241
+  Class 17: 0.019
+  Class 18: 0.866
+
+
+Detailed Metrics:
+Mean IoU: 0.416462
+Class IoU: [0.82176229 0.48218598 0.33813212 0.35916301 0.4762857  0.41204641
+ 0.68234015 0.51190358 0.81685518 0.10174006 0.01010117 0.4237521
+ 0.         0.09877641 0.79952145 0.4527314  0.24060287 0.01853238
+ 0.86633793]
+Overall Acc: 0.876513
+FreqW Acc: 0.792628
