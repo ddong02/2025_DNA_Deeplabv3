@@ -13,10 +13,10 @@ Performance Statistics:
 Parameters: 4.876 M
 FLOPs: 43.77 G
 GPU Memory: 508.51 MB
-Inference Time (mean): 16.997 ms
-Inference Time (median): 16.995 ms
-FPS (mean): 58.83
-FPS (median): 58.84
+Inference Time (mean): 16.975 ms
+Inference Time (median): 16.974 ms
+FPS (mean): 58.91
+FPS (median): 58.91
 Input Resolution: 1080x1920
 
 Accuracy Metrics:
@@ -47,10 +47,10 @@ Class IoU:
 
 
 Detailed Metrics:
-Mean IoU: 0.416462
-Class IoU: [0.82176229 0.48218598 0.33813212 0.35916301 0.4762857  0.41204641
- 0.68234015 0.51190358 0.81685518 0.10174006 0.01010117 0.4237521
- 0.         0.09877641 0.79952145 0.4527314  0.24060287 0.01853238
- 0.86633793]
-Overall Acc: 0.876513
-FreqW Acc: 0.792628
+Mean IoU: 0.416479
+Class IoU: [0.82179463 0.48222664 0.33815436 0.35915957 0.47628021 0.41201643
+ 0.68237964 0.51193495 0.81688223 0.10191442 0.01008472 0.42378869
+ 0.         0.09876964 0.79952151 0.4527219  0.2405772  0.01854691
+ 0.86634562]
+Overall Acc: 0.876524
+FreqW Acc: 0.792641
