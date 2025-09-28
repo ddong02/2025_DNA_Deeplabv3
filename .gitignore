@@ -12,3 +12,7 @@ datasets/
 validation_samples/
 sample_visualization/
 dataset_samples/
+val_transformed_samples/
+train_transformed_samples/
+test_visualizations/
+train_visualizations/

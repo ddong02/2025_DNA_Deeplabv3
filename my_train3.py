@@ -859,7 +859,7 @@ def main():
     inspect_data_samples(train_loader, val_loader, train_dst, val_dst, num_samples=2)
 
     # Set up model
-    model = network.modeling.__dict__[opts.model](num_classes=21, output_stride=opts.output_stride)
+    model = network.modeling.__dict__[opts.model](num_classes=19, output_stride=opts.output_stride)
     if opts.separable_conv and 'plus' in opts.model:
         network.convert_to_separable_conv(model.classifier)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
@@ -1100,286 +1100,6 @@ def main():
     if opts.save_val_results:
         print(f"   - Validation results: ./results/")
 
-def main():
-    opts = get_argparser().parse_args()
-    opts.num_classes = 19  # Fixed for semantic segmentation
-
-    # Setup visualization with safe connection
-    vis = None
-    if opts.enable_vis:
-        vis = safe_visdom_setup(opts.vis_port, opts.vis_env)
-        if vis is not None:
-            vis.vis_table("Options", vars(opts))
-
-    os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print("Device: %s" % device)
-
-    # Setup random seed
-    torch.manual_seed(opts.random_seed)
-    np.random.seed(opts.random_seed)
-    random.seed(opts.random_seed)
-
-    try:
-        train_dst, val_dst = get_dataset(opts)
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        return
-    
-    train_loader = data.DataLoader(
-        train_dst, batch_size=opts.batch_size, shuffle=True, num_workers=2,
-        pin_memory=True, drop_last=True)
-    val_loader = data.DataLoader(
-        val_dst, batch_size=opts.val_batch_size, shuffle=False, num_workers=2, pin_memory=True, drop_last=False)
-    print("Dataset: %s, Train set: %d, Val set: %d" %
-          (opts.dataset, len(train_dst), len(val_dst)))
-
-    print("\n--- DataLoaders Created ---")
-    print(f"Number of training batches: {len(train_loader)}")
-    print(f"Number of validation batches: {len(val_loader)}")
-
-    # Inspect data samples and save as images
-    inspect_data_samples(train_loader, val_loader, train_dst, val_dst, num_samples=2)
-
-    # Set up model
-    model = network.modeling.__dict__[opts.model](num_classes=19, output_stride=opts.output_stride)
-    if opts.separable_conv and 'plus' in opts.model:
-        network.convert_to_separable_conv(model.classifier)
-    utils.set_bn_momentum(model.backbone, momentum=0.01)
-
-    # Set up metrics
-    metrics = StreamSegMetrics(19)
-
-    # Set up optimizer
-    optimizer = torch.optim.SGD(params=[
-        {'params': model.backbone.parameters(), 'lr': 0.1 * opts.lr},
-        {'params': model.classifier.parameters(), 'lr': opts.lr},
-    ], lr=opts.lr, momentum=0.9, weight_decay=opts.weight_decay)
-
-    # Setup scheduler based on epochs
-    if opts.lr_policy == 'poly':
-        total_iters = opts.total_epochs * len(train_loader)
-        print(f"Setting up PolynomialLR scheduler: total_iters={total_iters}, power=0.9")
-        # Use PyTorch's built-in PolynomialLR to avoid complex number issues
-        scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, total_iters=total_iters, power=0.9)
-    elif opts.lr_policy == 'step':
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=opts.step_size, gamma=0.1)
-
-    # Set up criterion
-    if opts.loss_type == 'focal_loss':
-        criterion = utils.FocalLoss(ignore_index=255, size_average=True)
-    elif opts.loss_type == 'cross_entropy':
-        criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
-
-    def save_ckpt(path, epoch):
-        """ Save current model """
-        torch.save({
-            "cur_epoch": epoch,
-            "model_state": model.module.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-            "scheduler_state": scheduler.state_dict(),
-            "best_score": best_score,
-        }, path)
-        print("Model saved as %s" % path)
-
-    utils.mkdir('checkpoints')
-    # Restore
-    best_score = 0.0
-    cur_epoch = 0
-    if opts.ckpt is not None and os.path.isfile(opts.ckpt):
-        print(f"Loading checkpoint from: {opts.ckpt}")
-        checkpoint = torch.load(opts.ckpt, map_location=torch.device('cpu'), weights_only=False)
-        
-        # Verify checkpoint before loading
-        model = nn.DataParallel(model)
-        model.to(device)
-        verify_checkpoint_loading(checkpoint, model, optimizer, scheduler, opts)
-        
-        model.module.load_state_dict(checkpoint["model_state"])
-        if opts.continue_training:
-            optimizer.load_state_dict(checkpoint["optimizer_state"])
-            scheduler.load_state_dict(checkpoint["scheduler_state"])
-            cur_epoch = checkpoint.get("cur_epoch", 0)
-            best_score = checkpoint['best_score']
-            print("Training state restored from %s" % opts.ckpt)
-        print("Model restored from %s" % opts.ckpt)
-        del checkpoint
-    else:
-        print("[!] Retrain")
-        model = nn.DataParallel(model)
-        model.to(device)
-
-    # Modify model for correct number of classes
-    last_layer_in_channels = model.module.classifier.classifier[4].in_channels
-    new_num_classes = 19
-    print(f"Updating model to {new_num_classes} classes")
-    new_last_layer = nn.Conv2d(last_layer_in_channels, new_num_classes, kernel_size=(1, 1), stride=(1, 1))
-    new_last_layer = new_last_layer.to(device)
-    model.module.classifier.classifier[4] = new_last_layer
-
-    # Train Loop
-    vis_sample_id = np.random.randint(0, len(val_loader), opts.vis_num_samples,
-                                      np.int32) if opts.enable_vis else None
-    denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-
-    if opts.test_only:
-        model.eval()
-        val_score, ret_samples = validate(
-            opts=opts, model=model, loader=val_loader, device=device, metrics=metrics, ret_samples_ids=vis_sample_id)
-        print(metrics.to_str(val_score))
-        
-        if opts.run_final_test:
-            run_final_test(opts, model, device, metrics)
-        return
-
-    # Training loop
-    for epoch in range(cur_epoch, opts.total_epochs):
-        print(f"\n{'='*50}")
-        print(f"Epoch {epoch+1}/{opts.total_epochs}")
-        print(f"{'='*50}")
-        
-        # Handle backbone freezing for transfer learning
-        if opts.freeze_backbone and epoch < opts.freeze_epochs:
-            freeze_backbone(model, freeze=True)
-        elif opts.freeze_backbone and epoch == opts.freeze_epochs:
-            freeze_backbone(model, freeze=False)
-        
-        # Train
-        model.train()
-        epoch_loss = 0.0
-        num_batches = len(train_loader)
-        
-        # Use tqdm for progress bar
-        pbar = tqdm(enumerate(train_loader), total=num_batches, desc=f'Epoch {epoch+1}')
-        
-        for batch_idx, (images, labels) in pbar:
-            images = images.to(device, dtype=torch.float32)
-            labels = labels.to(device, dtype=torch.long)
-
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-
-            epoch_loss += loss.item()
-            
-            # Update progress bar with current loss
-            avg_loss = epoch_loss / (batch_idx + 1)
-            pbar.set_postfix({'Loss': f'{avg_loss:.4f}'})
-
-            if opts.lr_policy == 'poly':
-                scheduler.step()
-        
-        pbar.close()
-        
-        # Step scheduler if using step policy
-        if opts.lr_policy == 'step':
-            scheduler.step()
-            
-        # Calculate average epoch loss
-        avg_epoch_loss = epoch_loss / num_batches
-        print(f"Epoch {epoch+1} completed - Average Loss: {avg_epoch_loss:.4f}")
-        
-        # Update visdom with epoch-based metrics
-        if vis is not None:
-            try:
-                print(f"Updating Visdom with epoch {epoch+1} metrics...")
-                vis.vis_scalar('Training Loss', epoch+1, avg_epoch_loss)
-                current_lr = optimizer.param_groups[0]['lr']
-                vis.vis_scalar('Learning Rate', epoch+1, current_lr)
-                print(f"Training metrics sent to Visdom successfully")
-            except Exception as e:
-                print(f"Failed to update Visdom with training metrics: {e}")
-                vis = None  # Disable further Visdom attempts
-        
-        # Validation after each epoch
-        print("Running validation...")
-        model.eval()
-        val_score, ret_samples = validate(
-            opts=opts, model=model, loader=val_loader, device=device, metrics=metrics,
-            ret_samples_ids=vis_sample_id)
-        print(metrics.to_str(val_score))
-        
-        # Save sample predictions as images
-        if ret_samples:
-            images_for_save = []
-            targets_for_save = []
-            preds_for_save = []
-            
-            for img, target, pred in ret_samples:
-                images_for_save.append(img)
-                targets_for_save.append(target)
-                preds_for_save.append(pred)
-            
-            if images_for_save:
-                save_sample_predictions(
-                    images_for_save, targets_for_save, preds_for_save, 
-                    train_dst, save_dir='./validation_samples', epoch=epoch+1
-                )
-        
-        # Save checkpoints
-        save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
-                  (opts.model, opts.dataset, opts.output_stride), epoch+1)
-        
-        if val_score['Mean IoU'] > best_score:
-            best_score = val_score['Mean IoU']
-            save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
-                      (opts.model, opts.dataset, opts.output_stride), epoch+1)
-            print(f"New best model saved! Mean IoU: {best_score:.4f}")
-
-        # Update visdom with validation metrics
-        if vis is not None:
-            try:
-                print(f"Updating Visdom with validation metrics...")
-                vis.vis_scalar("[Val] Overall Acc", epoch+1, val_score['Overall Acc'])
-                vis.vis_scalar("[Val] Mean IoU", epoch+1, val_score['Mean IoU'])
-                vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
-
-                for k, (img, target, lbl) in enumerate(ret_samples):
-                    img = (denorm(img) * 255).astype(np.uint8)
-                    if hasattr(train_dst, 'decode_target'):
-                        target = train_dst.decode_target(target).transpose(2, 0, 1).astype(np.uint8)
-                        lbl = train_dst.decode_target(lbl).transpose(2, 0, 1).astype(np.uint8)
-                    else:
-                        target = np.stack([target] * 3, axis=0).astype(np.uint8)
-                        lbl = np.stack([lbl] * 3, axis=0).astype(np.uint8)
-                    concat_img = np.concatenate((img, target, lbl), axis=2)
-                    vis.vis_image('Sample %d' % k, concat_img)
-                
-                print(f"Validation metrics sent to Visdom successfully")
-            except Exception as e:
-                print(f"Failed to update Visdom with validation metrics: {e}")
-                vis = None  # Disable further Visdom attempts
-
-    print("\nTraining completed!")
-    print(f"Best validation Mean IoU: {best_score:.4f}")
-    
-    # Run final test evaluation if requested
-    if opts.run_final_test:
-        print("\n" + "="*60)
-        print("Starting final test evaluation...")
-        
-        # Load best model for testing
-        best_model_path = f'checkpoints/best_{opts.model}_{opts.dataset}_os{opts.output_stride}.pth'
-        if os.path.exists(best_model_path):
-            print(f"Loading best model from: {best_model_path}")
-            checkpoint = torch.load(best_model_path, map_location=device, weights_only=False)
-            model.module.load_state_dict(checkpoint["model_state"])
-            print(f"Best model loaded (Mean IoU: {checkpoint.get('best_score', 'Unknown')})")
-        
-        run_final_test(opts, model, device, metrics)
-    
-    # Final summary of saved files
-    print(f"\nGenerated Files:")
-    print(f"   - Checkpoints: ./checkpoints/")
-    print(f"   - Dataset samples: ./dataset_samples/")
-    print(f"   - Validation samples: ./validation_samples/")
-    if opts.run_final_test:
-        print(f"   - Test results: ./test_results/")
-    if opts.save_val_results:
-        print(f"   - Validation results: ./results/")
-
 
 if __name__ == '__main__':
     # Set matplotlib backend for headless environments
@@ -1398,6 +1118,16 @@ if __name__ == '__main__':
 #     --vis_port 28333 \
 #     --run_final_test
 
-# python my_train3.py --dataset 2025dna --model deeplabv3_mobilenet --test_only --ckpt checkpoints/latest_deeplabv3_mobilenet_2025dna_os8.pth --run_final_test
 
-# python my_train3.py --dataset 2025dna --model deeplabv3_mobilenet --test_only --ckpt checkpoints/latest_deeplabv3_mobilenet_2025dna_os8.pth --run_final_test
+# python my_train3.py \
+# --dataset 2025dna \
+# --model deeplabv3_mobilenet \
+# --test_only --ckpt checkpoints/latest_deeplabv3_mobilenet_2025dna_os8.pth \
+# --run_final_test
+
+### Test Only
+# python my_train3.py \
+# --dataset 2025dna --model \
+# deeplabv3_mobilenet --test_only \
+# --ckpt checkpoints/latest_deeplabv3_mobilenet_2025dna_os8.pth \
+# --run_final_test
