@@ -879,17 +879,3 @@ if __name__ == "__main__":
 #     --enable_vis \
 #     --vis_port 28333 \
 #     --save_val_results
-
-# python my_train5.py \
-#     --dataset dna2025dataset \
-#     --data_root ./datasets/data \
-#     --model deeplabv3_mobilenet \
-#     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
-#     --pretrained_num_classes 19 \
-#     --num_classes 19 \
-#     --epochs 100 \
-#     --unfreeze_epoch 2 \
-#     --batch_size 4 \
-#     --crop_size 1024 \
-#     --val_ratio 0.2 \
-#     --save_val_results

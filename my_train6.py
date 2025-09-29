@@ -104,7 +104,125 @@ def get_argparser():
     parser.add_argument("--vis_num_samples", type=int, default=4,
                         help='number of samples for visualization (default: 4)')
     
+    # ===== 클래스 가중치 관련 옵션 추가 =====
+    parser.add_argument("--use_class_weights", action='store_true', default=False,
+                        help="use class weights for handling class imbalance (default: True)")
+    parser.add_argument("--weight_method", type=str, default='inverse_freq',
+                        choices=['inverse_freq', 'sqrt_inv_freq', 'effective_num'],
+                        help="method to calculate class weights (default: inverse_freq)")
+    parser.add_argument("--effective_beta", type=float, default=0.9999,
+                        help="beta value for effective number method (default: 0.9999)")
+    
     return parser
+
+
+# ===== 클래스 가중치 계산 함수 =====
+def calculate_class_weights(dataset, num_classes, device, method='inverse_freq', beta=0.9999, ignore_index=255):
+    """
+    데이터셋의 모든 레이블을 순회하며 각 클래스의 픽셀 수를 계산하고,
+    선택한 방식으로 가중치를 산출합니다.
+    
+    Args:
+        dataset: 데이터셋 객체
+        num_classes: 클래스 개수
+        device: torch device (cpu/cuda)
+        method: 'inverse_freq', 'sqrt_inv_freq', 'effective_num' 중 선택
+        beta: effective number 계산 시 사용하는 파라미터
+        ignore_index: 무시할 인덱스 (기본값: 255)
+    
+    Returns:
+        torch.Tensor: 각 클래스에 대한 가중치
+    """
+    print("\n" + "="*80)
+    print(f"  Calculating Class Weights (Method: {method})")
+    print("="*80)
+    
+    class_counts = np.zeros(num_classes, dtype=np.float64)
+    
+    # 전체 데이터셋 순회하여 클래스별 픽셀 수 계산
+    print("Analyzing class distribution...")
+    for idx in tqdm(range(len(dataset)), desc="Processing labels"):
+        _, label = dataset[idx]
+        
+        if isinstance(label, torch.Tensor):
+            label = label.numpy()
+        
+        # 각 클래스의 픽셀 수 카운트
+        for class_id in range(num_classes):
+            class_counts[class_id] += np.sum(label == class_id)
+    
+    # 전체 픽셀 수 (ignore_index 제외)
+    total_pixels = np.sum(class_counts)
+    
+    # 클래스별 빈도 출력
+    print("\n" + "-"*80)
+    print("Class Distribution:")
+    print("-"*80)
+    print(f"{'ID':<4} {'Class Name':<25} {'Pixel Count':<15} {'Percentage':<12}")
+    print("-"*80)
+    
+    if hasattr(dataset, 'class_names'):
+        for i, (count, name) in enumerate(zip(class_counts, dataset.class_names)):
+            percentage = (count / total_pixels) * 100
+            print(f"{i:<4} {name:<25} {int(count):<15,} {percentage:>6.2f}%")
+    else:
+        for i, count in enumerate(class_counts):
+            percentage = (count / total_pixels) * 100
+            print(f"{i:<4} {'Class_' + str(i):<25} {int(count):<15,} {percentage:>6.2f}%")
+    
+    print("-"*80)
+    print(f"Total Pixels: {int(total_pixels):,}")
+    print("-"*80 + "\n")
+    
+    # 가중치 계산 방법 선택
+    if method == 'inverse_freq':
+        # Inverse Frequency: weight = total / (num_classes * count)
+        class_weights = total_pixels / (num_classes * class_counts + 1e-10)
+        
+    elif method == 'sqrt_inv_freq':
+        # Square Root Inverse Frequency (덜 극단적)
+        freq = class_counts / total_pixels
+        class_weights = 1.0 / (np.sqrt(freq) + 1e-10)
+        
+    elif method == 'effective_num':
+        # Effective Number of Samples
+        # Paper: "Class-Balanced Loss Based on Effective Number of Samples"
+        effective_num = 1.0 - np.power(beta, class_counts)
+        class_weights = (1.0 - beta) / (effective_num + 1e-10)
+    
+    else:
+        raise ValueError(f"Unknown weight calculation method: {method}")
+    
+    # 정규화 (평균이 1이 되도록)
+    class_weights = class_weights / np.mean(class_weights)
+    
+    # 계산된 가중치 출력
+    print("-"*80)
+    print("Calculated Class Weights:")
+    print("-"*80)
+    print(f"{'ID':<4} {'Class Name':<25} {'Weight':<12} {'Relative Impact':<15}")
+    print("-"*80)
+    
+    max_weight = np.max(class_weights)
+    if hasattr(dataset, 'class_names'):
+        for i, (weight, name) in enumerate(zip(class_weights, dataset.class_names)):
+            impact_bar = '█' * int((weight / max_weight) * 20)
+            print(f"{i:<4} {name:<25} {weight:>8.4f}    {impact_bar}")
+    else:
+        for i, weight in enumerate(class_weights):
+            impact_bar = '█' * int((weight / max_weight) * 20)
+            print(f"{i:<4} {'Class_' + str(i):<25} {weight:>8.4f}    {impact_bar}")
+    
+    print("-"*80)
+    print(f"Weight Statistics:")
+    print(f"  Mean: {np.mean(class_weights):.4f}")
+    print(f"  Std:  {np.std(class_weights):.4f}")
+    print(f"  Min:  {np.min(class_weights):.4f} (Class {np.argmin(class_weights)})")
+    print(f"  Max:  {np.max(class_weights):.4f} (Class {np.argmax(class_weights)})")
+    print("="*80 + "\n")
+    
+    # torch tensor로 변환
+    return torch.FloatTensor(class_weights).to(device)
 
 
 class ExtSegmentationTransform:
@@ -567,9 +685,32 @@ def main():
         opts.total_itrs = opts.epochs * len(train_loader)
         print(f"\nTraining for {opts.epochs} epochs, which is {opts.total_itrs} iterations.")
 
-    # Set up metrics and criterion
+    # ===== Weighted Cross-Entropy Loss 설정 =====
     metrics = StreamSegMetrics(opts.num_classes)
-    criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+    
+    if opts.use_class_weights:
+        # 클래스 가중치 계산
+        class_weights = calculate_class_weights(
+            dataset=train_dst,
+            num_classes=opts.num_classes,
+            device=device,
+            method=opts.weight_method,
+            beta=opts.effective_beta,
+            ignore_index=255
+        )
+        
+        # Weighted Cross-Entropy Loss
+        criterion = nn.CrossEntropyLoss(
+            weight=class_weights,
+            ignore_index=255,
+            reduction='mean'
+        )
+        print(f"\n✓ Using Weighted Cross-Entropy Loss (method: {opts.weight_method})")
+        
+    else:
+        # 일반 Cross-Entropy Loss
+        criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+        print("\n✓ Using Standard Cross-Entropy Loss (no class weights)")
 
     # Set up model
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
@@ -860,6 +1001,20 @@ def main():
 if __name__ == "__main__":
     main()
 
+# python my_train6.py \
+#     --dataset dna2025dataset \
+#     --data_root ./datasets/data \
+#     --model deeplabv3_mobilenet \
+#     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
+#     --pretrained_num_classes 19 \
+#     --num_classes 19 \
+#     --unfreeze_epoch 2 \
+#     --epochs 100 \
+#     --batch_size 4 \
+#     --crop_size 1024 \
+#     --use_class_weights \
+#     --weight_method inverse_freq
+
 # 1. Visdom 서버 시작 (별도 터미널)
 # python -m visdom.server -port 28333
 
@@ -878,18 +1033,4 @@ if __name__ == "__main__":
 #     --val_ratio 0.2 \
 #     --enable_vis \
 #     --vis_port 28333 \
-#     --save_val_results
-
-# python my_train5.py \
-#     --dataset dna2025dataset \
-#     --data_root ./datasets/data \
-#     --model deeplabv3_mobilenet \
-#     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
-#     --pretrained_num_classes 19 \
-#     --num_classes 19 \
-#     --epochs 100 \
-#     --unfreeze_epoch 2 \
-#     --batch_size 4 \
-#     --crop_size 1024 \
-#     --val_ratio 0.2 \
 #     --save_val_results
