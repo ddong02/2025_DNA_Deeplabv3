@@ -7,13 +7,13 @@ checkpoints
 results
 checkpoints_bak
 cityscapes
-test_results/comparisons
-datasets/
+test_results/
 validation_samples/
 sample_visualization/
 dataset_samples/
 val_transformed_samples/
 train_transformed_samples/
 test_visualizations/
-train_visualizations/
-test_results/predictions/
+results_deeplabv3/
+FLOPs.txt
+datasets/

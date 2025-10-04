@@ -324,8 +324,12 @@ def evaluate_model_performance(model, device, opts, input_resolution="1080x1920"
             
             print("Running FLOPs calculation...")
             flops, params = profile(flops_model, inputs=(x,), verbose=False)
-            print(f'FLOPs: {flops/(1024*1024*1024):.2f} G')
             print(f'Parameters (thop): {params/(1024*1024):.2f} M')
+            result = f'FLOPs: {flops/(1024*1024*1024):.2f} G'
+            print(result)
+
+            with open("FLOPs.txt", "w") as f:
+                f.write(result + "\n")
             
             del flops_model
             torch.cuda.empty_cache()
@@ -930,7 +934,7 @@ if __name__ == "__main__":
 #     --dataset dna2025dataset \
 #     --data_root ./datasets/data \
 #     --model deeplabv3_mobilenet \
-#     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
+#     --ckpt ./checkpoints/checkpoint_deeplabv3_mobilenet_dna2025dataset_os16_epoch010.pth \
 #     --num_classes 19 \
 #     --crop_size 1024 \
 #     --test_source test \
@@ -945,8 +949,22 @@ if __name__ == "__main__":
 #     --dataset dna2025dataset \
 #     --data_root ./datasets/data \
 #     --model deeplabv3_mobilenet \
-#     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
+#     --ckpt ./checkpoints/checkpoint_deeplabv3_mobilenet_dna2025dataset_os16_epoch010.pth \
 #     --num_classes 19 \
 #     --crop_size 1024 \
 #     --test_source test \
 #     --evaluate_performance
+
+# python my_test2.py \
+#     --dataset dna2025dataset \
+#     --data_root ./datasets/data \
+#     --model deeplabv3_mobilenet \
+#     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
+#     --num_classes 19 \
+#     --crop_size 1024 \
+#     --test_source test \
+#     --save_results \
+#     --save_samples \
+#     --num_samples 20 \
+#     --evaluate_performance \
+#     --input_resolution 1080x1920

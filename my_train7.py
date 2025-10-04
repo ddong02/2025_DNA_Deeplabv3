@@ -830,15 +830,17 @@ def main():
             for param in model.module.backbone.parameters():
                 param.requires_grad = True
             
-            # 새로운 optimizer 생성
-            print("Re-creating optimizer for fine-tuning the whole model...")
-            optimizer = torch.optim.SGD(
-                params=model.parameters(), 
-                lr=opts.lr / 10,
-                momentum=0.9, 
-                weight_decay=opts.weight_decay
-            )
-            print(f"New optimizer created with LR = {opts.lr / 10}")
+            # Differential Learning Rate 적용
+            print("Re-creating optimizer with differential learning rates...")
+            backbone_lr = opts.lr / 100  # 백본은 매우 낮은 학습률
+            classifier_lr = opts.lr / 10  # Classifier는 조금 낮은 학습률
+            
+            optimizer = torch.optim.SGD([
+                {'params': model.module.backbone.parameters(), 'lr': backbone_lr},
+                {'params': model.module.classifier.parameters(), 'lr': classifier_lr}
+            ], momentum=0.9, weight_decay=opts.weight_decay)
+            
+            print(f"Backbone LR: {backbone_lr:.6f}, Classifier LR: {classifier_lr:.6f}")
 
             # 새로운 scheduler 생성 (남은 iteration 고려)
             remaining_itrs = opts.total_itrs - cur_itrs
@@ -1052,18 +1054,19 @@ if __name__ == "__main__":
 #    - 단점: 클래스 수가 적으면 효과 제한적
 #    - 특징: 정규화하지 않는 것이 원 논문의 방식
 
-# python my_train6.py \
+# python my_train7.py \
 #     --dataset dna2025dataset \
 #     --data_root ./datasets/data \
 #     --model deeplabv3_mobilenet \
 #     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
 #     --pretrained_num_classes 19 \
 #     --num_classes 19 \
-#     --unfreeze_epoch 20 \
-#     --epochs 100 \
+#     --unfreeze_epoch 15 \
+#     --epochs 150 \
 #     --batch_size 4 \
 #     --crop_size 1024 \
 #     --use_class_weights \
+#     --lr 0.01 \
 #     --weight_method median_freq \
 #     --enable_vis \
 #     --vis_port 28333 \
