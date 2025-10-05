@@ -220,7 +220,7 @@ def main():
     
     # main.py에서 DNA2025Dataset을 import
     # 같은 디렉토리에 main.py가 있다고 가정
-    from my_train8 import DNA2025Dataset
+    from scripts.my_train8 import DNA2025Dataset
     
     print("="*80)
     print("  DNA2025 Dataset Visualization Tool")
