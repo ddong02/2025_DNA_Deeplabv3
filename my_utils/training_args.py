@@ -16,10 +16,10 @@ def get_argparser():
     # Dataset Options
     parser.add_argument("--data_root", type=str, default='./datasets/data',
                         help="path to Dataset")
-    parser.add_argument("--dataset", type=str, default='voc',
-                        choices=['voc', 'cityscapes', 'dna2025dataset'], 
+    parser.add_argument("--dataset", type=str, default='dna2025dataset',
+                        choices=['dna2025dataset'], 
                         help='Name of dataset')
-    parser.add_argument("--num_classes", type=int, default=None,
+    parser.add_argument("--num_classes", type=int, default=19,
                         help="num classes (default: None)")
 
     # Deeplab Options
@@ -28,7 +28,7 @@ def get_argparser():
                             not (name.startswith("__") or name.startswith('_')) and 
                             callable(network.modeling.__dict__[name]))
     
-    parser.add_argument("--model", type=str, default='deeplabv3plus_mobilenet',
+    parser.add_argument("--model", type=str, default='deeplabv3_mobilenet',
                         choices=available_models, help='model name')
     parser.add_argument("--separable_conv", action='store_true', default=False,
                         help="apply separable conv to decoder and aspp")
@@ -55,13 +55,13 @@ def get_argparser():
                         help='batch size (default: 4)')
     parser.add_argument("--val_batch_size", type=int, default=4,
                         help='batch size for validation (default: 4)')
-    parser.add_argument("--crop_size", type=int, default=513)
+    parser.add_argument("--crop_size", type=int, default=1024)
 
-    parser.add_argument("--ckpt", default=None, type=str,
+    parser.add_argument("--ckpt", required=True, type=str,
                         help="restore from checkpoint")
     parser.add_argument("--continue_training", action='store_true', default=False)
-    parser.add_argument("--pretrained_num_classes", type=int, default=21,
-                        help="number of classes in pretrained model (default: 21 for VOC)")
+    parser.add_argument("--pretrained_num_classes", type=int, default=19,
+                        help="number of classes in pretrained model (default: 19)")
     parser.add_argument("--gpu_id", type=str, default='0',
                         help="GPU ID")
     parser.add_argument("--weight_decay", type=float, default=1e-4,
