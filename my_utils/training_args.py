@@ -62,10 +62,6 @@ def get_argparser():
     parser.add_argument("--continue_training", action='store_true', default=False)
     parser.add_argument("--pretrained_num_classes", type=int, default=21,
                         help="number of classes in pretrained model (default: 21 for VOC)")
-
-    parser.add_argument("--loss_type", type=str, default='cross_entropy',
-                        choices=['cross_entropy', 'focal_loss'], 
-                        help="loss type (default: False)")
     parser.add_argument("--gpu_id", type=str, default='0',
                         help="GPU ID")
     parser.add_argument("--weight_decay", type=float, default=1e-4,
@@ -102,5 +98,25 @@ def get_argparser():
                         help="method to calculate class weights (default: inverse_freq)")
     parser.add_argument("--effective_beta", type=float, default=0.9999,
                         help="beta value for effective number method (default: 0.9999)")
-    
+
+    # Early Stopping 관련 인자 추가
+    parser.add_argument("--early_stop", action='store_true', default=False,
+                        help="Enable early stopping")
+    parser.add_argument("--early_stop_patience", type=int, default=10,
+                        help="Early stopping patience (epochs without improvement)")
+    parser.add_argument("--early_stop_min_delta", type=float, default=0.0001,
+                        help="Minimum improvement to count as progress")
+    parser.add_argument("--early_stop_metric", type=str, default='Mean IoU',
+                        choices=['Mean IoU', 'Overall Acc', 'Mean Acc'],
+                        help="Metric to monitor for early stopping")
+
+    # Loss function arguments
+    parser.add_argument("--loss_type", type=str, default='combined',
+                        choices=['ce', 'dice', 'combined'],
+                        help="Loss function type")
+    parser.add_argument("--ce_weight", type=float, default=0.5,
+                        help="Weight for CE in combined loss")
+    parser.add_argument("--dice_weight", type=float, default=0.5,
+                        help="Weight for Dice in combined loss")
+
     return parser
