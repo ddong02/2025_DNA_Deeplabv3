@@ -39,18 +39,47 @@ class TestSegmentationDataset(Dataset):
         
         # Define color palette for visualization (same as DNA2025TestDataset)
         self.color_palette = np.array([
-            [128, 64, 128], [244, 35, 232], [70, 70, 70], [102, 102, 156],
-            [190, 153, 153], [153, 153, 153], [0, 0, 142], [0, 0, 70],
-            [0, 60, 100], [0, 80, 100], [0, 0, 230], [220, 20, 60],
-            [255, 0, 0], [250, 170, 30], [220, 220, 0], [70, 130, 180],
-            [220, 220, 220], [250, 170, 160], [128, 128, 128]
+            [128, 64, 128],   # 0: Drivable Area
+            [244, 35, 232],   # 1: Sidewalk
+            [70, 70, 70],     # 2: Road Marking
+            [102, 102, 156],  # 3: Lane
+            [190, 153, 153],  # 4: Curb
+            [153, 153, 153],  # 5: Wall/Fence
+            [0, 0, 142],      # 6: Car
+            [0, 0, 70],       # 7: Truck
+            [0, 60, 100],     # 8: Bus
+            [0, 80, 100],     # 9: Bike/Bicycle
+            [0, 0, 230],      # 10: Other Vehicle
+            [220, 20, 60],    # 11: Pedestrian
+            [255, 0, 0],      # 12: Rider
+            [250, 170, 30],   # 13: Traffic Cone/Pole
+            [70, 130, 180],   # 14: Building
+            [220, 220, 0],    # 15: Traffic Sign
+            [250, 170, 160],  # 16: Traffic Light
+            [220, 220, 220],  # 17: Other Vertical Object
+            [128, 128, 128]   # 18: Other
         ], dtype=np.uint8)
         
         self.class_names = [
-            'Drivable Area', 'Sidewalk', 'Road Marking', 'Lane', 'Curb', 'Wall/Fence',
-            'Car', 'Truck', 'Bus', 'Bike/Bicycle', 'Other Vehicle', 'Pedestrian',
-            'Rider', 'Traffic Cone/Pole', 'Other Vertical Object', 'Building', 
-            'Traffic Sign', 'Traffic Light', 'Other'
+            'Drivable Area',           # 0
+            'Sidewalk',                # 1
+            'Road Marking',            # 2
+            'Lane',                    # 3
+            'Curb',                    # 4
+            'Wall/Fence',              # 5
+            'Car',                     # 6
+            'Truck',                   # 7
+            'Bus',                     # 8
+            'Bike/Bicycle',            # 9
+            'Other Vehicle',           # 10
+            'Pedestrian',              # 11
+            'Rider',                   # 12
+            'Traffic Cone/Pole',       # 13
+            'Building',                # 14
+            'Traffic Sign',            # 15
+            'Traffic Light',           # 16
+            'Other Vertical Object',   # 17
+            'Other'                    # 18
         ]
 
     def __len__(self):
@@ -134,10 +163,10 @@ def load_deeplabv3_mobilenet(weight_path, num_classes, device, output_stride=16,
     return model
 
 
-def save_prediction(pred, save_path, colormap_root, args, original_size):
+def save_prediction(pred, save_path, colormap_root, args, original_size, dataset):
     pred_np = pred.squeeze().cpu().numpy().astype(np.uint8)
     
-    # Resize prediction to original image size (width, height)
+    # Resize prediction to original image size
     pred_img = Image.fromarray(pred_np)
     pred_img = pred_img.resize(original_size, Image.NEAREST)
     pred_np_resized = np.array(pred_img)
@@ -145,12 +174,9 @@ def save_prediction(pred, save_path, colormap_root, args, original_size):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     pred_img.save(save_path)
 
-    # Save turbo colormap
-    normed = pred_np_resized.astype(np.float32) / 20
-    cmap = cm.get_cmap('turbo')
-    colored = cmap(normed)
-    rgb = (colored[:, :, :3] * 255).astype(np.uint8)
-    rgb_img = Image.fromarray(rgb)
+    # Use color_palette for colormap (수정된 부분)
+    colored_mask = dataset.decode_target(pred_np_resized)
+    rgb_img = Image.fromarray(colored_mask)
 
     rel_path = os.path.relpath(save_path, start=os.path.join(args.result_dir, "label"))
     cmap_path = os.path.join(colormap_root, rel_path)
@@ -173,7 +199,7 @@ def test(args):
     
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=2)
 
-    # Load DeepLabV3+ MobileNet model
+    # Load DeepLabV3 MobileNet model
     model = load_deeplabv3_mobilenet(
         args.weight_path, 
         args.num_classes, 
@@ -204,7 +230,7 @@ def test(args):
         rel_path = os.path.relpath(img_path[0], os.path.join(args.dataset_dir, "image"))
         save_path = os.path.join(args.result_dir, "label", rel_path)
 
-        save_prediction(pred, save_path, colormap_root, args, original_size)
+        save_prediction(pred, save_path, colormap_root, args, original_size, dataset)
     
     print(f"\nInference complete! Results saved to: {args.result_dir}")
     print(f"  - Grayscale predictions: {os.path.join(args.result_dir, 'label')}")
@@ -229,18 +255,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     test(args)
 
-# 사용 예시:
-# 1. DDRNet 사용:
-# python my_prediction_for_submit.py \
-#     --dataset_dir ./datasets/data/SemanticDatasetTest \
-#     --weight_path ./pths/ddrnet_model.pth \
-#     --result_dir ./results_ddrnet \
-#     --num_classes 19 \
-#     --model ddrnet
-
-# 2. DeepLabV3 MobileNet 사용:
 # python my_prediction_for_submit.py \
 #     --dataset_dir /mnt/c/Users/user/Desktop/eogus/dataset/2025dna/SemanticDatasetTest \
-#     --weight_path ./checkpoints/checkpoint_deeplabv3_mobilenet_dna2025dataset_os16_epoch010.pth \
-#     --result_dir ./results_deeplabv3 \
-#     --num_classes 19
+#     --weight_path ./checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
+#     --result_dir ./results_deeplabv3
