@@ -10,6 +10,7 @@ import os
 import random
 import numpy as np
 import time
+import wandb
 
 from torch.utils import data
 from utils import ext_transforms as et
@@ -26,6 +27,8 @@ from my_utils.dna2025_dataset import DNA2025Dataset
 from my_utils.validation import validate
 from my_utils.checkpoint import save_checkpoint, load_pretrained_model
 from my_utils.early_stopping import EarlyStopping
+from my_utils.calculate_class_weights import calculate_class_weights
+from my_utils.losses import CombinedLoss
 
 
 def get_dataset(opts):
@@ -121,17 +124,138 @@ def main():
         opts.total_itrs = opts.epochs * len(train_loader)
         print(f"\nTraining for {opts.epochs} epochs, which is {opts.total_itrs} iterations.")
 
-    # ===== Setup loss function (Baseline: Standard Cross-Entropy) =====
+    # ===== Setup loss function: Combined Loss + Class Weights (Safe Version) =====
     metrics = StreamSegMetrics(opts.num_classes)
     
-    # Use standard Cross-Entropy Loss without class weights
-    criterion = nn.CrossEntropyLoss(
+    print("\n" + "="*80)
+    print("  LOSS FUNCTION SETUP")
+    print("="*80)
+    
+    # Load or calculate class weights
+    weights_method = 'sqrt_inv_freq'
+    
+    if opts.class_weights_file and os.path.isfile(opts.class_weights_file):
+        # Load pre-calculated weights
+        print(f"\n✓ Loading pre-calculated class weights from: {opts.class_weights_file}")
+        try:
+            weights_data = torch.load(opts.class_weights_file, map_location=device, weights_only=False)
+            class_weights = weights_data['weights'].to(device)
+            
+            print(f"  Method: {weights_data.get('method', 'unknown')}")
+            print(f"  Dataset: {weights_data.get('dataset', 'unknown')}")
+            print(f"  Num classes: {weights_data.get('num_classes', len(class_weights))}")
+            print(f"  Created: {weights_data.get('timestamp', 'unknown')}")
+            print(f"  Weights range: [{class_weights.min().item():.2f}, {class_weights.max().item():.2f}]")
+            print(f"  Weights ratio: {(class_weights.max() / class_weights.min()).item():.1f}x")
+            print("✓ Class weights loaded successfully!")
+            
+        except Exception as e:
+            print(f"✗ Failed to load class weights: {e}")
+            print("  Calculating class weights instead...")
+            class_weights = calculate_class_weights(
+                dataset=train_dst,
+                num_classes=opts.num_classes,
+                device=device,
+                method=weights_method,
+                ignore_index=255
+            )
+    else:
+        # Calculate class weights
+        if opts.class_weights_file:
+            print(f"  Class weights file not found: {opts.class_weights_file}")
+            print("  Calculating class weights...")
+        
+        class_weights = calculate_class_weights(
+            dataset=train_dst,
+            num_classes=opts.num_classes,
+            device=device,
+            method=weights_method,
+            ignore_index=255
+        )
+        
+        # Save calculated weights for future use
+        if not opts.skip_save_class_weights:
+            # Create directory for class weights
+            weights_dir = 'class_weights'
+            utils.mkdir(weights_dir)
+            
+            # Generate filename if not specified
+            if opts.class_weights_file:
+                weights_save_path = opts.class_weights_file
+            else:
+                weights_save_path = os.path.join(
+                    weights_dir, 
+                    f"{opts.dataset}_{weights_method}_nc{opts.num_classes}.pth"
+                )
+            
+            try:
+                import datetime
+                weights_data = {
+                    'weights': class_weights.cpu(),
+                    'method': weights_method,
+                    'dataset': opts.dataset,
+                    'num_classes': opts.num_classes,
+                    'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                torch.save(weights_data, weights_save_path)
+                print(f"\n✓ Class weights saved to: {weights_save_path}")
+                print(f"  You can reuse these weights with: --class_weights_file {weights_save_path}")
+            except Exception as e:
+                print(f"\n⚠ Failed to save class weights: {e}")
+                print("  Training will continue without saving weights.")
+    
+    # Apply safety clipping with dynamic max based on target ratio
+    original_min = class_weights.min().item()
+    original_max = class_weights.max().item()
+    
+    # Set target max ratio (30x is a good balance for fine-tuning)
+    target_max_ratio = 30.0
+    min_weight_threshold = 0.1
+    max_weight_threshold = min_weight_threshold * target_max_ratio  # 3.0
+    
+    class_weights = torch.clamp(class_weights, min=min_weight_threshold, max=max_weight_threshold)
+    
+    final_min = class_weights.min().item()
+    final_max = class_weights.max().item()
+    final_ratio = final_max / final_min
+    
+    print("-"*80)
+    print("Class Weights Safety Check:")
+    print(f"  Original range: [{original_min:.2f}, {original_max:.2f}]")
+    print(f"  Original ratio: {original_max / original_min:.1f}x")
+    print(f"  Target max ratio: {target_max_ratio:.1f}x")
+    print(f"  After clipping: [{final_min:.2f}, {final_max:.2f}]")
+    print(f"  Final ratio: {final_ratio:.1f}x")
+    
+    if original_max > max_weight_threshold:
+        print(f"  ⚠ Clipped {(original_max - max_weight_threshold):.2f} from max weight for stability")
+    
+    if final_ratio <= 20:
+        print(f"  ✓ Weight ratio is SAFE ({final_ratio:.1f}x ≤ 20x)")
+    elif final_ratio <= 30:
+        print(f"  ✓ Weight ratio is ACCEPTABLE ({final_ratio:.1f}x ≤ 30x)")
+    else:
+        print(f"  ⚠ Weight ratio is HIGH ({final_ratio:.1f}x > 30x) - may cause instability")
+    print("-"*80)
+    
+    # Create Combined Loss with safe parameters
+    criterion = CombinedLoss(
+        ce_weight=0.7,              # CE 70% (stable)
+        dice_weight=0.3,            # Dice 30% (conservative)
+        smooth=5.0,                 # Large smooth for stability
         ignore_index=255,
-        reduction='mean'
+        class_weights=class_weights,
+        square_denominator=True     # More stable gradients
     )
-    print(f"\n✓ Using Standard Cross-Entropy Loss (Baseline)")
-    print(f"  No class weights, no advanced loss functions")
-    print(f"  This is the baseline for comparison with improved methods")
+    
+    print("\n✓ Loss Function Configuration:")
+    print(f"  Type: Combined Loss (CE + Dice)")
+    print(f"  CE Weight: 0.7 (70%)")
+    print(f"  Dice Weight: 0.3 (30%)")
+    print(f"  Dice Smooth: 5.0 (high stability)")
+    print(f"  Square Denominator: True")
+    print(f"  Class Weights: Applied (sqrt_inv_freq, clipped)")
+    print("="*80 + "\n")
 
     # Set up model
     model = network.modeling.__dict__[opts.model](
@@ -142,8 +266,16 @@ def main():
         network.convert_to_separable_conv(model.classifier)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
 
-    # Load pretrained model if specified
-    utils.mkdir('checkpoints')
+    # Setup checkpoint directory based on experiment_name
+    if opts.experiment_name:
+        checkpoint_dir = os.path.join('checkpoints', opts.experiment_name)
+        print(f"\n✓ Experiment Name: '{opts.experiment_name}'")
+        print(f"  Checkpoints will be saved to: {checkpoint_dir}/")
+    else:
+        checkpoint_dir = 'checkpoints'
+        print(f"\n✓ Using default checkpoint directory: {checkpoint_dir}/")
+    
+    utils.mkdir(checkpoint_dir)
     if opts.ckpt is not None and os.path.isfile(opts.ckpt):
         model, _ = load_pretrained_model(
             model, opts.ckpt, 
@@ -159,14 +291,20 @@ def main():
         param.requires_grad = False
     
     trainable_params_stage1 = filter(lambda p: p.requires_grad, model.parameters())
+    
+    # Adjusted learning rate for Combined Loss (30% of original)
+    adjusted_lr = opts.lr * 0.3
+    print(f"Original LR: {opts.lr:.2e}")
+    print(f"Adjusted LR for Combined Loss: {adjusted_lr:.2e} (30% of original)")
+    
     optimizer = torch.optim.SGD(
         params=trainable_params_stage1, 
-        lr=opts.lr, 
+        lr=adjusted_lr,  # Reduced LR for stability
         momentum=0.9, 
         weight_decay=opts.weight_decay
     )
     
-    print(f"Initial Learning Rate: {opts.lr}")
+    print(f"Stage 1 Learning Rate: {adjusted_lr:.2e}")
 
     if opts.lr_policy == 'poly':
         scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
@@ -182,6 +320,14 @@ def main():
     best_score = 0.0
     cur_itrs = 0
     training_start_time = time.time()
+    
+    # Track metrics for displaying changes
+    prev_metrics = {
+        'loss': None,
+        'Mean IoU': None,
+        'Overall Acc': None,
+        'Mean Acc': None
+    }
     
     # ===== Early Stopping Setup =====
     early_stopping = None
@@ -216,15 +362,18 @@ def main():
                 param.requires_grad = True
             
             print("Re-creating optimizer with differential learning rates...")
-            backbone_lr = opts.lr / 100
-            classifier_lr = opts.lr / 10
+            # Adjusted for Combined Loss (30% of original)
+            # Fine-tuning from converged model: use less aggressive differential rates
+            backbone_lr = (opts.lr / 20) * 0.3      # 1.5e-7 (was 3e-8, too low)
+            classifier_lr = (opts.lr / 5) * 0.3     # 6e-7 (was 3e-7, slightly higher)
             
             optimizer = torch.optim.SGD([
                 {'params': model.module.backbone.parameters(), 'lr': backbone_lr},
                 {'params': model.module.classifier.parameters(), 'lr': classifier_lr}
             ], momentum=0.9, weight_decay=opts.weight_decay)
             
-            print(f"Backbone LR: {backbone_lr:.6f}, Classifier LR: {classifier_lr:.6f}")
+            print(f"Backbone LR: {backbone_lr:.6f} (adjusted for Combined Loss)")
+            print(f"Classifier LR: {classifier_lr:.6f} (adjusted for Combined Loss)")
 
             remaining_itrs = opts.total_itrs - cur_itrs
             if opts.lr_policy == 'poly':
@@ -272,6 +421,10 @@ def main():
             outputs = model(images)
             loss = criterion(outputs, labels)
             loss.backward()
+            
+            # Gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             optimizer.step()
             scheduler.step()
 
@@ -313,8 +466,44 @@ def main():
             denorm=denorm
         )
 
-        print(f"Validation Results:")
+        # Display validation results with changes from previous epoch
+        print(f"\n{'='*80}")
+        print(f"Validation Results (Epoch {epoch}):")
+        print(f"{'='*80}")
+        
+        # Helper function to format change
+        def format_change(current, previous, larger_is_better=True):
+            if previous is None:
+                return ""
+            delta = current - previous
+            if abs(delta) < 0.0001:
+                return "  (━ ±0.0000)"
+            arrow = "↑" if delta > 0 else "↓"
+            color_good = (delta > 0) if larger_is_better else (delta < 0)
+            sign = "+" if delta > 0 else ""
+            return f"  ({arrow} {sign}{delta:.4f})"
+        
+        # Display metrics with changes
+        current_loss = avg_epoch_loss
+        current_miou = val_score['Mean IoU']
+        current_oacc = val_score['Overall Acc']
+        current_macc = val_score['Mean Acc']
+        
+        print(f"  Training Loss:   {current_loss:.6f}{format_change(current_loss, prev_metrics['loss'], larger_is_better=False)}")
+        print(f"  Mean IoU:        {current_miou:.4f}{format_change(current_miou, prev_metrics['Mean IoU'])}")
+        print(f"  Overall Acc:     {current_oacc:.4f}{format_change(current_oacc, prev_metrics['Overall Acc'])}")
+        print(f"  Mean Acc:        {current_macc:.4f}{format_change(current_macc, prev_metrics['Mean Acc'])}")
+        print(f"{'='*80}")
+        
+        # Show detailed class IoU (original output)
+        print(f"\nDetailed Metrics:")
         print(metrics.to_str(val_score))
+        
+        # Update previous metrics for next epoch
+        prev_metrics['loss'] = current_loss
+        prev_metrics['Mean IoU'] = current_miou
+        prev_metrics['Overall Acc'] = current_oacc
+        prev_metrics['Mean Acc'] = current_macc
 
         # ===== Early Stopping Check =====
         # Only apply early stopping in Stage 2 (after backbone is unfrozen)
@@ -339,7 +528,7 @@ def main():
                     
                     # Save final checkpoint before stopping
                     save_checkpoint(
-                        'checkpoints/early_stopped_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride),
+                        os.path.join(checkpoint_dir, 'early_stopped_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
                         epoch, cur_itrs, model, optimizer, scheduler, best_score,
                         include_epoch_in_name=True
                     )
@@ -351,21 +540,40 @@ def main():
                 print(f"[Early Stopping] Waiting for Stage 2 (epoch {opts.unfreeze_epoch}) to start monitoring...")
         # ================================
 
-        # Visdom updates
+        # WandB updates (Enhanced monitoring)
         if vis is not None:
             current_lr = optimizer.param_groups[0]['lr']
-            vis.vis_scalar('Training Loss', epoch, avg_epoch_loss)
-            vis.vis_scalar('Learning Rate', epoch, current_lr)
-            vis.vis_scalar("[Val] Overall Acc", epoch, val_score['Overall Acc'])
-            vis.vis_scalar("[Val] Mean Acc", epoch, val_score['Mean Acc'])
-            vis.vis_scalar("[Val] Mean IoU", epoch, val_score['Mean IoU'])
-            vis.vis_table("[Val] Class IoU", val_score['Class IoU'])
+            
+            # Calculate gradient norm for monitoring
+            total_norm = 0
+            for p in model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm = total_norm ** 0.5
+            
+            # Log all metrics in one batch to avoid step conflicts
+            wandb.log({
+                'epoch': epoch,
+                'Training Loss': avg_epoch_loss,
+                'Learning Rate': current_lr,
+                '[Val] Overall Acc': val_score['Overall Acc'],
+                '[Val] Mean Acc': val_score['Mean Acc'],
+                '[Val] Mean IoU': val_score['Mean IoU'],
+                'Gradient Norm': total_norm,
+            }, step=epoch)
+            
+            # Log class IoU table with same step
+            vis.vis_table("[Val] Class IoU", val_score['Class IoU'], step=epoch)
 
+            # Log validation images (if available)
             if ret_samples and len(ret_samples) > 0:
                 samples_to_show = ret_samples[:4]
                 visdom_samples_dir = os.path.join('results', 'visdom_samples')
                 os.makedirs(visdom_samples_dir, exist_ok=True)
                 
+                # Prepare all images first
+                wandb_images = {}
                 for k, (img, target, lbl) in enumerate(samples_to_show):
                     img = (denorm(img) * 255).astype(np.uint8)
                     
@@ -381,26 +589,32 @@ def main():
                         lbl_decoded = np.stack([lbl, lbl, lbl], axis=0).astype(np.uint8)
                     
                     concat_img = np.concatenate((img, target_decoded, lbl_decoded), axis=2)
-                    vis.vis_image(f'Validation Sample {k}', concat_img)
                     
+                    # Convert CHW to HWC for WandB
                     concat_img_hwc = concat_img.transpose(1, 2, 0)
+                    wandb_images[f'Validation Sample {k}'] = wandb.Image(concat_img_hwc, caption=f'Sample {k}')
+                    
+                    # Save locally
                     save_path = os.path.join(visdom_samples_dir, 
                                            f'validation_sample_{k}_epoch_{epoch:03d}.png')
                     try:
                         Image.fromarray(concat_img_hwc).save(save_path)
                     except Exception as e:
                         print(f"Warning: Failed to save visdom sample {k}: {e}")
+                
+                # Log all images at once
+                wandb.log(wandb_images, step=epoch)
 
         # Save checkpoints
         current_score = val_score['Mean IoU']
         if current_score > best_score:
             best_score = current_score
             save_checkpoint(
-                'checkpoints/best_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride),
+                os.path.join(checkpoint_dir, 'best_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
                 epoch, cur_itrs, model, optimizer, scheduler, best_score
             )
             save_checkpoint(
-                'checkpoints/best_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride),
+                os.path.join(checkpoint_dir, 'best_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
                 epoch, cur_itrs, model, optimizer, scheduler, best_score,
                 include_epoch_in_name=True
             )
@@ -415,13 +629,13 @@ def main():
                 )
         
         save_checkpoint(
-            'checkpoints/latest_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride),
+            os.path.join(checkpoint_dir, 'latest_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
             epoch, cur_itrs, model, optimizer, scheduler, best_score
         )
         
         if epoch % 10 == 0:
             save_checkpoint(
-                'checkpoints/checkpoint_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride),
+                os.path.join(checkpoint_dir, 'checkpoint_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
                 epoch, cur_itrs, model, optimizer, scheduler, best_score,
                 include_epoch_in_name=True
             )
@@ -469,14 +683,38 @@ def main():
 if __name__ == "__main__":
     main()
 
-# 학습 실행 예시 (Baseline - WandB 활성화)
+# 학습 실행 예시 (Combined Loss + Class Weights - Safe Version)
 # python my_train.py \
+#     --dataset dna2025dataset \
+#     --data_root ./datasets/data \
+#     --model deeplabv3_mobilenet \
 #     --ckpt ./checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
+#     --pretrained_num_classes 19 \
+#     --num_classes 19 \
+#     --epochs 200 \
+#     --unfreeze_epoch 15 \
 #     --lr 1e-5 \
+#     --batch_size 4 \
+#     --crop_size 1024 \
+#     --experiment_name combined_loss_safe \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "baseline-standard-ce" \
-#     --wandb_tags "baseline,standard-ce" \
+#     --wandb_name "combined-loss-classweights-safe" \
+#     --wandb_tags "combined-loss,class-weights,safe" \
 #     --save_val_results \
 #     --early_stop \
 #     --early_stop_patience 15
+
+# 주요 설정:
+# - Checkpoint 저장: checkpoints/combined_loss_safe/
+# - Loss: Combined (CE 70% + Dice 30%)
+# - Class Weights: sqrt_inv_freq, clipped (0.1~10.0)
+# - LR: 자동으로 30%로 조정됨 (1e-5 → 3e-6)
+# - Gradient Clipping: max_norm=1.0
+# - Dice Smooth: 5.0 (high stability)
+# - Square Denominator: True
+
+# 다른 실험 예시:
+# python my_train.py --experiment_name focal_loss ... (checkpoints/focal_loss/)
+# python my_train.py --experiment_name baseline_v2 ... (checkpoints/baseline_v2/)
+# python my_train.py ... (--experiment_name 없으면 checkpoints/에 저장)

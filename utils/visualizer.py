@@ -50,9 +50,10 @@ class Visualizer(object):
         if not isinstance(y, list):
             y = [y]
         
-        # Log each (x, y) pair
+        # Log each (x, y) pair without explicit step to avoid conflicts
+        # WandB will auto-increment steps, and we can rely on commit=False for batching
         for step, value in zip(x, y):
-            wandb.log({name: value}, step=int(step))
+            wandb.log({name: value}, commit=False)
 
     def vis_image(self, name, img, env=None, opts=None):
         """
@@ -71,13 +72,14 @@ class Visualizer(object):
         # Log image to WandB
         wandb.log({name: wandb.Image(img, caption=name)})
     
-    def vis_table(self, name, tbl, opts=None):
+    def vis_table(self, name, tbl, step=None, opts=None):
         """
         Log table data to WandB
         
         Args:
             name (str): Table name
             tbl (dict): Dictionary of key-value pairs
+            step (int): Step number for logging (optional)
             opts (dict): Additional options (not used in WandB)
         """
         # Log as config if it's the Options table
@@ -90,10 +92,16 @@ class Visualizer(object):
                 data = [[str(k), float(v) if isinstance(v, (int, float)) else str(v)] 
                         for k, v in tbl.items()]
                 table = wandb.Table(columns=columns, data=data)
-                wandb.log({name: table})
+                if step is not None:
+                    wandb.log({name: table}, step=step)
+                else:
+                    wandb.log({name: table}, commit=False)
             else:
                 # If not a dict, just log as is
-                wandb.log({name: tbl})
+                if step is not None:
+                    wandb.log({name: tbl}, step=step)
+                else:
+                    wandb.log({name: tbl}, commit=False)
     
     def finish(self):
         """Finish WandB run"""

@@ -62,6 +62,10 @@ def get_argparser():
     parser.add_argument("--continue_training", action='store_true', default=False)
     parser.add_argument("--pretrained_num_classes", type=int, default=19,
                         help="number of classes in pretrained model (default: 19)")
+    parser.add_argument("--experiment_name", type=str, default=None,
+                        help="experiment name for organizing checkpoints (e.g., 'combined_loss_safe'). "
+                             "If specified, checkpoints will be saved to 'checkpoints/{experiment_name}/' "
+                             "instead of 'checkpoints/'")
     parser.add_argument("--gpu_id", type=str, default='0',
                         help="GPU ID")
     parser.add_argument("--weight_decay", type=float, default=1e-4,
@@ -104,5 +108,12 @@ def get_argparser():
     parser.add_argument("--early_stop_metric", type=str, default='Mean IoU',
                         choices=['Mean IoU', 'Overall Acc', 'Mean Acc'],
                         help="Metric to monitor for early stopping")
+    
+    # Class Weights 관련 인자
+    parser.add_argument("--class_weights_file", type=str, default=None,
+                        help="Path to saved class weights file (.pth). If specified, load weights from file. "
+                             "If not specified, calculate and save to 'class_weights/{dataset}_{method}.pth'")
+    parser.add_argument("--skip_save_class_weights", action='store_true', default=False,
+                        help="Skip saving calculated class weights to file")
 
     return parser
