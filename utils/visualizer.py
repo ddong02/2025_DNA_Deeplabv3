@@ -1,87 +1,120 @@
-from visdom import Visdom
-import json 
+import wandb
+import numpy as np
 
 class Visualizer(object):
-    """ Visualizer
+    """ Visualizer using Weights & Biases (WandB)
     """
-    def __init__(self, port='13579', env='main', id=None):
-        #self.cur_win = {}
-        self.vis = Visdom(port=port, env=env)
+    def __init__(self, project='semantic-segmentation', name=None, config=None, 
+                 resume=None, id=None, notes=None, tags=None):
+        """
+        Initialize WandB visualizer
+        
+        Args:
+            project (str): WandB project name
+            name (str): Run name (experiment name)
+            config (dict): Configuration dictionary to log
+            resume (str): 'allow', 'must', 'never', or None
+            id (str): Unique run ID for resuming
+            notes (str): Notes about the run
+            tags (list): Tags for organizing runs
+        """
         self.id = id
-        self.env = env
-        # Restore
-        #ori_win = self.vis.get_window_data()
-        #ori_win = json.loads(ori_win)
-        #print(ori_win)
-        #self.cur_win = { v['title']: k for k, v in ori_win.items()  }
+        self.project = project
+        self.run_name = name
+        
+        # Initialize WandB
+        self.run = wandb.init(
+            project=project,
+            name=name,
+            config=config,
+            resume=resume,
+            id=id,
+            notes=notes,
+            tags=tags
+        )
+        
+        print(f"✓ WandB initialized: {self.run.url}")
 
     def vis_scalar(self, name, x, y, opts=None):
+        """
+        Log scalar values to WandB
+        
+        Args:
+            name (str): Metric name
+            x (int/float): Step (epoch or iteration)
+            y (int/float): Value to log
+            opts (dict): Additional options (not used in WandB)
+        """
         if not isinstance(x, list):
             x = [x]
         if not isinstance(y, list):
             y = [y]
         
-        if self.id is not None:
-            name = "[%s]"%self.id + name
-        default_opts = { 'title': name }
-        if opts is not None:
-            default_opts.update(opts)
-
-        #win = self.cur_win.get(name, None)
-        #if win is not None:
-        self.vis.line( X=x, Y=y, win=name, opts=default_opts, update='append')
-        #else:
-        #    self.cur_win[name] = self.vis.line( X=x, Y=y, opts=default_opts)
+        # Log each (x, y) pair
+        for step, value in zip(x, y):
+            wandb.log({name: value}, step=int(step))
 
     def vis_image(self, name, img, env=None, opts=None):
-        """ vis image in visdom
         """
-        if env is None:
-            env = self.env 
-        if self.id is not None:
-            name = "[%s]"%self.id + name
-        #win = self.cur_win.get(name, None)
-        default_opts = { 'title': name }
-        if opts is not None:
-                default_opts.update(opts)
-        #if win is not None:
-        self.vis.image( img=img, win=name, opts=opts, env=env )
-        #else:
-        #    self.cur_win[name] = self.vis.image( img=img, opts=default_opts, env=env )
+        Log image to WandB
+        
+        Args:
+            name (str): Image name
+            img (np.array): Image array in CHW format (3, H, W) or HWC format
+            env (str): Not used in WandB (kept for compatibility)
+            opts (dict): Additional options (not used in WandB)
+        """
+        # Convert CHW to HWC if needed
+        if img.ndim == 3 and img.shape[0] in [1, 3, 4]:
+            img = np.transpose(img, (1, 2, 0))
+        
+        # Log image to WandB
+        wandb.log({name: wandb.Image(img, caption=name)})
     
     def vis_table(self, name, tbl, opts=None):
-        #win = self.cur_win.get(name, None)
-
-        tbl_str = "<table width=\"100%\"> "
-        tbl_str+="<tr> \
-                 <th>Term</th> \
-                 <th>Value</th> \
-                 </tr>"
-        for k, v in tbl.items():
-            tbl_str+=  "<tr> \
-                       <td>%s</td> \
-                       <td>%s</td> \
-                       </tr>"%(k, v)
-
-        tbl_str+="</table>"
-
-        default_opts = { 'title': name }
-        if opts is not None:
-            default_opts.update(opts)
-        #if win is not None:
-        self.vis.text(tbl_str, win=name, opts=default_opts)
-        #else:
-        #self.cur_win[name] = self.vis.text(tbl_str, opts=default_opts)
+        """
+        Log table data to WandB
+        
+        Args:
+            name (str): Table name
+            tbl (dict): Dictionary of key-value pairs
+            opts (dict): Additional options (not used in WandB)
+        """
+        # Log as config if it's the Options table
+        if name == "Options" or name == "[Options]":
+            wandb.config.update(tbl, allow_val_change=True)
+        else:
+            # For other tables (like Class IoU), log as a WandB table
+            if isinstance(tbl, dict):
+                columns = ["Class", "Value"]
+                data = [[str(k), float(v) if isinstance(v, (int, float)) else str(v)] 
+                        for k, v in tbl.items()]
+                table = wandb.Table(columns=columns, data=data)
+                wandb.log({name: table})
+            else:
+                # If not a dict, just log as is
+                wandb.log({name: tbl})
+    
+    def finish(self):
+        """Finish WandB run"""
+        wandb.finish()
 
 
 if __name__=='__main__':
-    import numpy as np
-    vis = Visualizer(port=35588, env='main')
+    # Example usage
+    vis = Visualizer(project='test-project', name='test-run')
+    
+    # Test table logging
     tbl = {"lr": 214, "momentum": 0.9}
     vis.vis_table("test_table", tbl)
-    tbl = {"lr": 244444, "momentum": 0.9, "haha": "hoho"}
-    vis.vis_table("test_table", tbl)
-
-    vis.vis_scalar(name='loss', x=0, y=1)
-    vis.vis_scalar(name='loss', x=2, y=4)
-    vis.vis_scalar(name='loss', x=4, y=6)
+    
+    # Test scalar logging
+    vis.vis_scalar(name='loss', x=0, y=1.5)
+    vis.vis_scalar(name='loss', x=1, y=1.2)
+    vis.vis_scalar(name='loss', x=2, y=0.9)
+    
+    # Test image logging
+    test_img = np.random.randint(0, 255, (3, 64, 64), dtype=np.uint8)
+    vis.vis_image('test_image', test_img)
+    
+    vis.finish()

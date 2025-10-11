@@ -39,8 +39,8 @@ def get_argparser():
                         help="save segmentation results to \"./results\"")
     parser.add_argument("--total_itrs", type=int, default=None,
                         help="total iterations (now calculated from epochs)")
-    parser.add_argument("--epochs", type=int, default=100,
-                        help="number of epochs to train (default: 100)")
+    parser.add_argument("--epochs", type=int, default=200,
+                        help="number of epochs to train (default: 200)")
     parser.add_argument("--unfreeze_epoch", type=int, default=16,
                         help="epoch to unfreeze backbone (default: 16)")
     parser.add_argument("--lr", type=float, default=1e-3,
@@ -80,25 +80,20 @@ def get_argparser():
                         choices=['2012_aug', '2012', '2011', '2009', '2008', '2007'], 
                         help='year of VOC')
 
-    # Visdom options
+    # WandB (Weights & Biases) options
     parser.add_argument("--enable_vis", action='store_true', default=False,
-                        help="use visdom for visualization")
-    parser.add_argument("--vis_port", type=str, default='13570',
-                        help='port for visdom')
-    parser.add_argument("--vis_env", type=str, default='main',
-                        help='env for visdom')
+                        help="use WandB for visualization and logging")
+    parser.add_argument("--wandb_project", type=str, default='deeplabv3-semantic-segmentation',
+                        help='WandB project name')
+    parser.add_argument("--wandb_name", type=str, default=None,
+                        help='WandB run name (default: auto-generated)')
+    parser.add_argument("--wandb_notes", type=str, default=None,
+                        help='Notes about this run')
+    parser.add_argument("--wandb_tags", type=str, default=None,
+                        help='Comma-separated tags for this run (e.g., "baseline,mobilenet")')
     parser.add_argument("--vis_num_samples", type=int, default=4,
                         help='number of samples for visualization (default: 4)')
     
-    # Class weight options
-    parser.add_argument("--use_class_weights", action='store_true', default=False,
-                        help="use class weights for handling class imbalance")
-    parser.add_argument("--weight_method", type=str, default='inverse_freq',
-                        choices=['inverse_freq', 'sqrt_inv_freq', 'effective_num', 'median_freq'],
-                        help="method to calculate class weights (default: inverse_freq)")
-    parser.add_argument("--effective_beta", type=float, default=0.9999,
-                        help="beta value for effective number method (default: 0.9999)")
-
     # Early Stopping 관련 인자 추가
     parser.add_argument("--early_stop", action='store_true', default=False,
                         help="Enable early stopping")
@@ -109,14 +104,5 @@ def get_argparser():
     parser.add_argument("--early_stop_metric", type=str, default='Mean IoU',
                         choices=['Mean IoU', 'Overall Acc', 'Mean Acc'],
                         help="Metric to monitor for early stopping")
-
-    # Loss function arguments
-    parser.add_argument("--loss_type", type=str, default='combined',
-                        choices=['ce', 'dice', 'combined'],
-                        help="Loss function type")
-    parser.add_argument("--ce_weight", type=float, default=0.5,
-                        help="Weight for CE in combined loss")
-    parser.add_argument("--dice_weight", type=float, default=0.5,
-                        help="Weight for Dice in combined loss")
 
     return parser

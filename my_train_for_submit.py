@@ -66,8 +66,6 @@ def get_argparser():
     parser.add_argument("--pretrained_num_classes", type=int, default=21,
                         help="number of classes in pretrained model (default: 21 for VOC)")
 
-    parser.add_argument("--loss_type", type=str, default='cross_entropy',
-                        choices=['cross_entropy', 'focal_loss'], help="loss type (default: False)")
     parser.add_argument("--gpu_id", type=str, default='0',
                         help="GPU ID")
     parser.add_argument("--weight_decay", type=float, default=1e-4,
@@ -77,27 +75,22 @@ def get_argparser():
     parser.add_argument("--print_interval", type=int, default=10,
                         help="print interval of loss (default: 10)")
 
-    # Visdom options
+    # WandB options
     parser.add_argument("--enable_vis", action='store_true', default=False,
-                        help="use visdom for visualization")
-    parser.add_argument("--vis_port", type=str, default='13570',
-                        help='port for visdom')
-    parser.add_argument("--vis_env", type=str, default='main',
-                        help='env for visdom')
-    
-    # Class weights
-    parser.add_argument("--use_class_weights", action='store_true', default=False,
-                        help="use class weights for handling class imbalance (default: True)")
-    parser.add_argument("--weight_method", type=str, default='inverse_freq',
-                        choices=['inverse_freq', 'sqrt_inv_freq', 'effective_num', 'median_freq'],
-                        help="method to calculate class weights (default: inverse_freq)")
-    parser.add_argument("--effective_beta", type=float, default=0.9999,
-                        help="beta value for effective number method (default: 0.9999)")
+                        help="use WandB for visualization")
+    parser.add_argument("--wandb_project", type=str, default='deeplabv3-semantic-segmentation',
+                        help='WandB project name')
+    parser.add_argument("--wandb_name", type=str, default=None,
+                        help='WandB run name (default: auto-generated)')
+    parser.add_argument("--wandb_notes", type=str, default=None,
+                        help='Notes about this run')
+    parser.add_argument("--wandb_tags", type=str, default=None,
+                        help='Comma-separated tags for this run (e.g., "baseline,mobilenet")')
     
     return parser
 
 
-def calculate_class_weights(dataset, num_classes, device, method='inverse_freq', beta=0.9999, ignore_index=255):
+def calculate_class_weights_removed(dataset, num_classes, device, method='inverse_freq', beta=0.9999, ignore_index=255):
     """Calculate class weights for handling class imbalance"""
     print("\n" + "="*80)
     print(f"  Calculating Class Weights (Method: {method})")
@@ -355,10 +348,28 @@ def get_dataset(opts):
 def main():
     opts = get_argparser().parse_args()
     
-    # Setup visualization
-    vis = Visualizer(port=opts.vis_port, env=opts.vis_env) if opts.enable_vis else None
-    if vis is not None:
-        vis.vis_table("Options", vars(opts))
+    # Setup visualization with WandB
+    vis = None
+    if opts.enable_vis:
+        # Parse tags if provided
+        tags = None
+        if opts.wandb_tags:
+            tags = [tag.strip() for tag in opts.wandb_tags.split(',')]
+        
+        # Generate run name if not provided
+        run_name = opts.wandb_name
+        if run_name is None:
+            run_name = f"{opts.model}_{opts.dataset}_os{opts.output_stride}_baseline"
+        
+        vis = Visualizer(
+            project=opts.wandb_project,
+            name=run_name,
+            config=vars(opts),
+            notes=opts.wandb_notes,
+            tags=tags
+        )
+    else:
+        print("WandB visualization disabled. Use --enable_vis to enable.")
 
     os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -381,21 +392,11 @@ def main():
         opts.total_itrs = opts.epochs * len(train_loader)
         print(f"Training for {opts.epochs} epochs, which is {opts.total_itrs} iterations.\n")
 
-    # Setup loss function
-    if opts.use_class_weights:
-        class_weights = calculate_class_weights(
-            dataset=train_dst,
-            num_classes=opts.num_classes,
-            device=device,
-            method=opts.weight_method,
-            beta=opts.effective_beta,
-            ignore_index=255
-        )
-        criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=255, reduction='mean')
-        print(f"✓ Using Weighted Cross-Entropy Loss (method: {opts.weight_method})\n")
-    else:
-        criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
-        print("✓ Using Standard Cross-Entropy Loss (no class weights)\n")
+    # Setup loss function (Baseline: Standard Cross-Entropy)
+    criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+    print("✓ Using Standard Cross-Entropy Loss (Baseline)")
+    print("  No class weights, no advanced loss functions")
+    print("  This is the baseline for comparison with improved methods\n")
 
     # Set up model
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
@@ -566,15 +567,18 @@ def main():
         print()
 
     print("Training finished.")
+    
+    # Finish WandB run
+    if vis is not None:
+        print("\nFinalizing WandB logging...")
+        vis.finish()
+        print("✓ WandB run completed")
 
 
 if __name__ == "__main__":
     main()
 
-# Visdom 서버 시작
-# python -m visdom.server -port 28333
-
-# 학습 실행
+# 학습 실행 예시 (Baseline - WandB 활성화)
 # python my_train_for_submit.py \
 #     --model deeplabv3_mobilenet \
 #     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
@@ -585,4 +589,6 @@ if __name__ == "__main__":
 #     --batch_size 4 \
 #     --crop_size 1024 \
 #     --enable_vis \
-#     --vis_port 28333
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_name "baseline-standard-ce" \
+#     --wandb_tags "baseline,standard-ce,submit"

@@ -22,6 +22,15 @@ import torchvision.transforms.functional as F
 from glob import glob
 from torch.utils.data import Dataset
 
+# WandB for logging
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not installed. WandB logging will be skipped.")
+    print("Install with: pip install wandb")
+
 # Optional: thop for FLOPs calculation
 try:
     from thop import profile
@@ -59,7 +68,9 @@ def get_argparser():
     parser.add_argument("--batch_size", type=int, default=1,
                         help='batch size for testing (default: 1)')
     parser.add_argument("--save_results", action='store_true', default=False,
-                        help="save test results to \"./test_results\"")
+                        help="save test results")
+    parser.add_argument("--output_dir", type=str, default='test_results',
+                        help='directory to save test results (default: test_results)')
     parser.add_argument("--save_samples", action='store_true', default=False,
                         help="save sample images")
     parser.add_argument("--num_samples", type=int, default=10,
@@ -76,6 +87,18 @@ def get_argparser():
                         help="Input resolution for performance evaluation (HxW)")
     parser.add_argument("--speed_iterations", type=int, default=200,
                         help="Number of iterations for speed test")
+
+    # WandB Options
+    parser.add_argument("--use_wandb", action='store_true', default=False,
+                        help="Log test results to WandB")
+    parser.add_argument("--wandb_project", type=str, default='deeplabv3-semantic-segmentation',
+                        help='WandB project name')
+    parser.add_argument("--wandb_run_id", type=str, default=None,
+                        help='WandB run ID to resume (if you want to add test results to existing training run)')
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                        help='WandB run name (default: auto-generated with "-test" suffix)')
+    parser.add_argument("--wandb_tags", type=str, default=None,
+                        help='Comma-separated tags (e.g., "baseline,test")')
 
     return parser
 
@@ -478,7 +501,7 @@ def test_model(opts, model, loader, device, metrics, save_samples_ids=None):
     ret_samples = []
     
     if opts.save_results:
-        results_dir = 'test_results'
+        results_dir = opts.output_dir
         os.makedirs(results_dir, exist_ok=True)
         
         if opts.save_samples:
@@ -683,6 +706,52 @@ def evaluate_custom_miou(pred_dir, label_dir, num_classes):
 def main():
     opts = get_argparser().parse_args()
     
+    # Initialize WandB if requested
+    wandb_run = None
+    if opts.use_wandb:
+        if not WANDB_AVAILABLE:
+            print("ERROR: WandB logging requested but wandb is not installed!")
+            print("Install with: pip install wandb")
+            return
+        
+        # Parse tags
+        tags = ['test']  # Always add 'test' tag
+        if opts.wandb_tags:
+            tags.extend([tag.strip() for tag in opts.wandb_tags.split(',')])
+        
+        # Generate run name
+        run_name = opts.wandb_run_name
+        if run_name is None:
+            # Extract model info from checkpoint name if possible
+            ckpt_name = os.path.basename(opts.ckpt).replace('.pth', '')
+            run_name = f"{ckpt_name}-test"
+        
+        # Resume existing run or create new one
+        if opts.wandb_run_id:
+            print(f"Resuming WandB run: {opts.wandb_run_id}")
+            wandb_run = wandb.init(
+                project=opts.wandb_project,
+                id=opts.wandb_run_id,
+                resume='allow'
+            )
+        else:
+            print(f"Creating new WandB run: {run_name}")
+            wandb_run = wandb.init(
+                project=opts.wandb_project,
+                name=run_name,
+                tags=tags,
+                config={
+                    'mode': 'test',
+                    'model': opts.model,
+                    'checkpoint': opts.ckpt,
+                    'dataset': opts.dataset,
+                    'num_classes': opts.num_classes,
+                    'batch_size': opts.batch_size
+                }
+            )
+        
+        print(f"✓ WandB initialized: {wandb_run.url}")
+    
     os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
@@ -764,7 +833,7 @@ def main():
     custom_miou = None
     custom_ious = None
     if opts.save_results:
-        results_dir = 'test_results'
+        results_dir = opts.output_dir
         
         pred_dir = save_prediction_masks(opts, model, test_loader, device, results_dir)
         
@@ -783,7 +852,7 @@ def main():
                         break
     
     if opts.save_results:
-        results_dir = 'test_results'
+        results_dir = opts.output_dir
         
         summary_path = os.path.join(results_dir, 'comprehensive_results.txt')
         with open(summary_path, 'w') as f:
@@ -848,19 +917,134 @@ def main():
         print(f"GPU Memory: {performance_stats['memory_MB']:.2f} MB")
     
     print("="*60)
+    
+    # Log results to WandB
+    if opts.use_wandb and wandb_run is not None:
+        print("\n" + "="*60)
+        print("LOGGING TO WANDB")
+        print("="*60)
+        
+        # Prepare test metrics
+        test_metrics = {
+            '[Test] Mean IoU': score['Mean IoU'],
+            '[Test] Overall Acc': score['Overall Acc'],
+            '[Test] FreqW Acc': score['FreqW Acc']
+        }
+        
+        # Add class-wise IoU
+        class_ious = score['Class IoU']
+        if hasattr(test_dst, 'get_class_info'):
+            class_info = test_dst.get_class_info()
+            for i, (class_name, iou) in enumerate(zip(class_info['names'], class_ious)):
+                test_metrics[f'[Test] IoU/{class_name}'] = iou
+        else:
+            for i, iou in enumerate(class_ious):
+                test_metrics[f'[Test] IoU/Class_{i}'] = iou
+        
+        # Add custom mIoU if available
+        if custom_miou is not None:
+            test_metrics['[Test] Custom mIoU'] = custom_miou
+        
+        # Add performance stats if available
+        if performance_stats:
+            test_metrics['[Model] Parameters (M)'] = performance_stats['total_params_M']
+            if performance_stats['flops_G']:
+                test_metrics['[Model] FLOPs (G)'] = performance_stats['flops_G']
+            test_metrics['[Model] GPU Memory (MB)'] = performance_stats['memory_MB']
+            test_metrics['[Model] Latency Mean (ms)'] = performance_stats['latency_mean_ms']
+            test_metrics['[Model] Latency Median (ms)'] = performance_stats['latency_median_ms']
+            test_metrics['[Model] FPS Mean'] = performance_stats['fps_mean']
+            test_metrics['[Model] FPS Median'] = performance_stats['fps_median']
+        
+        # Log all metrics
+        wandb.log(test_metrics)
+        
+        # Create summary table for class-wise IoU
+        class_iou_data = []
+        if hasattr(test_dst, 'get_class_info'):
+            class_info = test_dst.get_class_info()
+            for i, (class_name, iou) in enumerate(zip(class_info['names'], class_ious)):
+                class_iou_data.append([i, class_name, iou])
+        else:
+            for i, iou in enumerate(class_ious):
+                class_iou_data.append([i, f'Class_{i}', iou])
+        
+        table = wandb.Table(
+            columns=["Class ID", "Class Name", "IoU"],
+            data=class_iou_data
+        )
+        wandb.log({"[Test] Class IoU Table": table})
+        
+        # Log sample images if available
+        if ret_samples and len(ret_samples) > 0:
+            print("Logging sample images to WandB...")
+            denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            
+            for idx, (img, target, pred) in enumerate(ret_samples[:5]):  # Log up to 5 samples
+                # Denormalize and convert to uint8
+                img_np = (denorm(img) * 255).transpose(1, 2, 0).astype(np.uint8)
+                
+                # Decode target and prediction
+                if hasattr(test_dst, 'decode_target'):
+                    target_rgb = test_dst.decode_target(target).astype(np.uint8)
+                    pred_rgb = test_dst.decode_target(pred).astype(np.uint8)
+                else:
+                    target_rgb = np.stack([target, target, target], axis=-1).astype(np.uint8)
+                    pred_rgb = np.stack([pred, pred, pred], axis=-1).astype(np.uint8)
+                
+                # Log to WandB
+                wandb.log({
+                    f"[Test] Sample {idx}/Image": wandb.Image(img_np, caption=f"Sample {idx} - Input"),
+                    f"[Test] Sample {idx}/Ground Truth": wandb.Image(target_rgb, caption=f"Sample {idx} - GT"),
+                    f"[Test] Sample {idx}/Prediction": wandb.Image(pred_rgb, caption=f"Sample {idx} - Pred")
+                })
+        
+        print(f"✓ Test results logged to WandB: {wandb_run.url}")
+        print("="*60)
+        
+        # Finish WandB run
+        wandb.finish()
+        print("✓ WandB run finished")
 
 
 if __name__ == "__main__":
     main()
 
-# 1. 기본 테스트 + 성능 평가
+# ===== 사용 예시 =====
+
+# 1. Baseline 테스트 + WandB 로깅 (새 run)
 # python my_test.py \
 #     --ckpt ./checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
 #     --save_results \
+#     --output_dir test_results_baseline \
 #     --save_samples \
-#     --evaluate_performance
+#     --evaluate_performance \
+#     --use_wandb \
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_run_name "baseline-test" \
+#     --wandb_tags "baseline,test"
 
-# 2. 빠른 성능 테스트 (결과 저장 없음)
+# 2. 기존 훈련 run에 테스트 결과 추가 (resume)
+# python my_test.py \
+#     --ckpt ./checkpoints/best_deeplabv3_mobilenet_dna2025dataset_os16.pth \
+#     --save_results \
+#     --output_dir test_results_baseline \
+#     --evaluate_performance \
+#     --use_wandb \
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_run_id "YOUR_RUN_ID_HERE"
+
+# 3. 빠른 테스트 (WandB 없음, 결과만 로컬 저장)
 # python my_test.py \
 #     --ckpt ./checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
+#     --save_results \
+#     --output_dir test_results_quick \
 #     --evaluate_performance
+
+# 4. 커스텀 결과 폴더 지정
+# python my_test.py \
+#     --ckpt ./checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
+#     --save_results \
+#     --output_dir test_results_experiment_001 \
+#     --save_samples \
+#     --num_samples 20
