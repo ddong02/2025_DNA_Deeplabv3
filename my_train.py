@@ -20,6 +20,9 @@ import torch
 import torch.nn as nn
 from utils.visualizer import Visualizer
 from PIL import Image
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 # ===== Import separated modules =====
 from my_utils.training_args import get_argparser
@@ -208,10 +211,10 @@ def main():
     original_min = class_weights.min().item()
     original_max = class_weights.max().item()
     
-    # Set target max ratio (30x is a good balance for fine-tuning)
-    target_max_ratio = 30.0
+    # Set target max ratio (10x for more balanced training with minority classes)
+    target_max_ratio = 10.0
     min_weight_threshold = 0.1
-    max_weight_threshold = min_weight_threshold * target_max_ratio  # 3.0
+    max_weight_threshold = min_weight_threshold * target_max_ratio  # 1.0
     
     class_weights = torch.clamp(class_weights, min=min_weight_threshold, max=max_weight_threshold)
     
@@ -230,31 +233,56 @@ def main():
     if original_max > max_weight_threshold:
         print(f"  ⚠ Clipped {(original_max - max_weight_threshold):.2f} from max weight for stability")
     
-    if final_ratio <= 20:
-        print(f"  ✓ Weight ratio is SAFE ({final_ratio:.1f}x ≤ 20x)")
-    elif final_ratio <= 30:
-        print(f"  ✓ Weight ratio is ACCEPTABLE ({final_ratio:.1f}x ≤ 30x)")
+    if final_ratio <= 10:
+        print(f"  ✓ Weight ratio is SAFE ({final_ratio:.1f}x ≤ 10x)")
+    elif final_ratio <= 15:
+        print(f"  ✓ Weight ratio is ACCEPTABLE ({final_ratio:.1f}x ≤ 15x)")
     else:
-        print(f"  ⚠ Weight ratio is HIGH ({final_ratio:.1f}x > 30x) - may cause instability")
+        print(f"  ⚠ Weight ratio is HIGH ({final_ratio:.1f}x > 15x) - may cause instability")
+    
+    # Print detailed class weights after clipping
+    print("\n" + "="*80)
+    print("  DETAILED CLASS WEIGHTS (After Clipping)")
+    print("="*80)
+    print(f"{'Class':<8} {'Weight':<10} {'Status':<15} {'Note'}")
     print("-"*80)
     
-    # Create Combined Loss with safe parameters
-    criterion = CombinedLoss(
-        ce_weight=0.7,              # CE 70% (stable)
-        dice_weight=0.3,            # Dice 30% (conservative)
-        smooth=5.0,                 # Large smooth for stability
+    # Print each class weight with status
+    for i, weight in enumerate(class_weights):
+        weight_val = weight.item()
+        
+        # Determine status
+        if weight_val == min_weight_threshold:
+            status = "CLIPPED_MIN"
+            note = "Set to minimum"
+        elif weight_val == max_weight_threshold:
+            status = "CLIPPED_MAX"
+            note = "Set to maximum"
+        else:
+            status = "ORIGINAL"
+            note = "No clipping"
+        
+        print(f"{'C' + str(i):<8} {weight_val:<10.4f} {status:<15} {note}")
+    
+    print("-"*80)
+    print(f"Total classes: {len(class_weights)}")
+    print(f"Classes clipped to min: {sum(1 for w in class_weights if w.item() == min_weight_threshold)}")
+    print(f"Classes clipped to max: {sum(1 for w in class_weights if w.item() == max_weight_threshold)}")
+    print(f"Classes unchanged: {sum(1 for w in class_weights if w.item() not in [min_weight_threshold, max_weight_threshold])}")
+    print("="*80)
+    
+    # Use CE Loss with Class Weights (Dice Loss removed due to divergence)
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights,
         ignore_index=255,
-        class_weights=class_weights,
-        square_denominator=True     # More stable gradients
+        reduction='mean'
     )
     
     print("\n✓ Loss Function Configuration:")
-    print(f"  Type: Combined Loss (CE + Dice)")
-    print(f"  CE Weight: 0.7 (70%)")
-    print(f"  Dice Weight: 0.3 (30%)")
-    print(f"  Dice Smooth: 5.0 (high stability)")
-    print(f"  Square Denominator: True")
-    print(f"  Class Weights: Applied (sqrt_inv_freq, clipped)")
+    print(f"  Type: Weighted Cross-Entropy Loss")
+    print(f"  Class Weights: Applied (sqrt_inv_freq method)")
+    print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
+    print(f"  This configuration balances class importance while maintaining stability")
     print("="*80 + "\n")
 
     # Set up model
@@ -292,19 +320,15 @@ def main():
     
     trainable_params_stage1 = filter(lambda p: p.requires_grad, model.parameters())
     
-    # Adjusted learning rate for Combined Loss (30% of original)
-    adjusted_lr = opts.lr * 0.3
-    print(f"Original LR: {opts.lr:.2e}")
-    print(f"Adjusted LR for Combined Loss: {adjusted_lr:.2e} (30% of original)")
+    # Using full learning rate with Weighted CE Loss
+    print(f"Stage 1 Learning Rate: {opts.lr:.2e}")
     
     optimizer = torch.optim.SGD(
         params=trainable_params_stage1, 
-        lr=adjusted_lr,  # Reduced LR for stability
+        lr=opts.lr,
         momentum=0.9, 
         weight_decay=opts.weight_decay
     )
-    
-    print(f"Stage 1 Learning Rate: {adjusted_lr:.2e}")
 
     if opts.lr_policy == 'poly':
         scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
@@ -362,18 +386,17 @@ def main():
                 param.requires_grad = True
             
             print("Re-creating optimizer with differential learning rates...")
-            # Adjusted for Combined Loss (30% of original)
-            # Fine-tuning from converged model: use less aggressive differential rates
-            backbone_lr = (opts.lr / 20) * 0.3      # 1.5e-7 (was 3e-8, too low)
-            classifier_lr = (opts.lr / 5) * 0.3     # 6e-7 (was 3e-7, slightly higher)
+            # Differential learning rates for fine-tuning converged model
+            backbone_lr = opts.lr / 20      # 1/20 of base LR for stable backbone fine-tuning
+            classifier_lr = opts.lr / 5     # 1/5 of base LR for classifier
             
             optimizer = torch.optim.SGD([
                 {'params': model.module.backbone.parameters(), 'lr': backbone_lr},
                 {'params': model.module.classifier.parameters(), 'lr': classifier_lr}
             ], momentum=0.9, weight_decay=opts.weight_decay)
             
-            print(f"Backbone LR: {backbone_lr:.6f} (adjusted for Combined Loss)")
-            print(f"Classifier LR: {classifier_lr:.6f} (adjusted for Combined Loss)")
+            print(f"Backbone LR: {backbone_lr:.2e}")
+            print(f"Classifier LR: {classifier_lr:.2e}")
 
             remaining_itrs = opts.total_itrs - cur_itrs
             if opts.lr_policy == 'poly':
@@ -454,7 +477,7 @@ def main():
 
         save_images_this_epoch = opts.save_val_results and (epoch % 10 == 0)
         
-        val_score, ret_samples = validate(
+        val_score, ret_samples, confusion_mat = validate(
             opts=opts, 
             model=model, 
             loader=val_loader, 
@@ -527,11 +550,12 @@ def main():
                     print(f"{'='*80}\n")
                     
                     # Save final checkpoint before stopping
+                    early_stop_path = os.path.join(checkpoint_dir, f'early_stopped_epoch_{epoch:03d}.pth')
                     save_checkpoint(
-                        os.path.join(checkpoint_dir, 'early_stopped_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
-                        epoch, cur_itrs, model, optimizer, scheduler, best_score,
-                        include_epoch_in_name=True
+                        early_stop_path,
+                        epoch, cur_itrs, model, optimizer, scheduler, best_score
                     )
+                    print(f"✓ Early stopped checkpoint saved → {os.path.basename(early_stop_path)}")
                     
                     break  # Exit training loop
         elif early_stopping is not None and epoch < opts.unfreeze_epoch:
@@ -565,6 +589,48 @@ def main():
             
             # Log class IoU table with same step
             vis.vis_table("[Val] Class IoU", val_score['Class IoU'], step=epoch)
+            
+            # Log confusion matrix as heatmap
+            # Normalize confusion matrix by row (true labels) for better visualization
+            confusion_mat_normalized = confusion_mat / (confusion_mat.sum(axis=1, keepdims=True) + 1e-10)
+            
+            # Create class labels
+            class_labels = [f"C{i}" for i in range(opts.num_classes)]
+            
+            # Create confusion matrix heatmap with matplotlib
+            fig, ax = plt.subplots(figsize=(12, 10))
+            im = ax.imshow(confusion_mat_normalized, cmap='Blues', interpolation='nearest')
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label('Normalized Frequency', rotation=270, labelpad=20)
+            
+            # Set ticks and labels
+            ax.set_xticks(np.arange(opts.num_classes))
+            ax.set_yticks(np.arange(opts.num_classes))
+            ax.set_xticklabels(class_labels)
+            ax.set_yticklabels(class_labels)
+            
+            # Rotate x labels
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+            
+            # Add text annotations (only if not too many classes)
+            if opts.num_classes <= 15:
+                for i in range(opts.num_classes):
+                    for j in range(opts.num_classes):
+                        text = ax.text(j, i, f'{confusion_mat_normalized[i, j]:.2f}',
+                                     ha="center", va="center",
+                                     color="white" if confusion_mat_normalized[i, j] > 0.5 else "black",
+                                     fontsize=max(6, 10 - opts.num_classes // 2))
+            
+            ax.set_xlabel('Predicted Label', fontsize=12)
+            ax.set_ylabel('True Label', fontsize=12)
+            ax.set_title(f'Confusion Matrix - Epoch {epoch} (Row-Normalized)', fontsize=14)
+            plt.tight_layout()
+            
+            # Log to WandB
+            wandb.log({"[Val] Confusion Matrix": wandb.Image(fig)}, step=epoch)
+            plt.close(fig)
 
             # Log validation images (if available)
             if ret_samples and len(ret_samples) > 0:
@@ -607,38 +673,43 @@ def main():
 
         # Save checkpoints
         current_score = val_score['Mean IoU']
+        
+        # 1. Save best model separately (fixed filename)
         if current_score > best_score:
             best_score = current_score
+            best_model_path = os.path.join(checkpoint_dir, 'best_model.pth')
             save_checkpoint(
-                os.path.join(checkpoint_dir, 'best_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
+                best_model_path,
                 epoch, cur_itrs, model, optimizer, scheduler, best_score
             )
-            save_checkpoint(
-                os.path.join(checkpoint_dir, 'best_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
-                epoch, cur_itrs, model, optimizer, scheduler, best_score,
-                include_epoch_in_name=True
-            )
+            print(f"✓ New best model saved! (Mean IoU: {best_score:.4f}) → {best_model_path}")
             
             if opts.save_val_results and not save_images_this_epoch:
                 print("Best score achieved! Saving 3 comparison images...")
-                validate(
+                _, _, _ = validate(
                     opts=opts, model=model, loader=val_loader, 
                     device=device, metrics=metrics, ret_samples_ids=None,
                     epoch=f"best_epoch_{epoch}", save_sample_images=True,
                     denorm=denorm
                 )
         
+        # 2. Save checkpoint for every epoch (with epoch number)
+        epoch_checkpoint_path = os.path.join(
+            checkpoint_dir, 
+            f'epoch_{epoch:03d}_miou_{current_score:.4f}.pth'
+        )
         save_checkpoint(
-            os.path.join(checkpoint_dir, 'latest_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
+            epoch_checkpoint_path,
             epoch, cur_itrs, model, optimizer, scheduler, best_score
         )
+        print(f"✓ Epoch {epoch} checkpoint saved → {os.path.basename(epoch_checkpoint_path)}")
         
-        if epoch % 10 == 0:
-            save_checkpoint(
-                os.path.join(checkpoint_dir, 'checkpoint_%s_%s_os%d.pth' % (opts.model, opts.dataset, opts.output_stride)),
-                epoch, cur_itrs, model, optimizer, scheduler, best_score,
-                include_epoch_in_name=True
-            )
+        # 3. Save latest model (overwritten each epoch)
+        latest_path = os.path.join(checkpoint_dir, 'latest_model.pth')
+        save_checkpoint(
+            latest_path,
+            epoch, cur_itrs, model, optimizer, scheduler, best_score
+        )
         
         # Time tracking
         epoch_time = time.time() - epoch_start_time
@@ -682,39 +753,22 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# 학습 실행 예시 (Combined Loss + Class Weights - Safe Version)
+    
 # python my_train.py \
-#     --dataset dna2025dataset \
+#     --ckpt checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
 #     --data_root ./datasets/data \
-#     --model deeplabv3_mobilenet \
-#     --ckpt ./checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
-#     --pretrained_num_classes 19 \
-#     --num_classes 19 \
+#     --experiment_name "ce_only2" \
 #     --epochs 200 \
-#     --unfreeze_epoch 15 \
-#     --lr 1e-5 \
 #     --batch_size 4 \
+#     --val_batch_size 4 \
+#     --lr 0.001 \
 #     --crop_size 1024 \
-#     --experiment_name combined_loss_safe \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "combined-loss-classweights-safe" \
-#     --wandb_tags "combined-loss,class-weights,safe" \
-#     --save_val_results \
+#     --wandb_name "ce-classweights-only2" \
+#     --wandb_notes "LR restored to 100%, class weights clipped to 10x ratio, confusion matrix logging enabled" \
+#     --wandb_tags "ce_only,improved,confusion_matrix,lr_restore,change_ratio" \
 #     --early_stop \
-#     --early_stop_patience 15
-
-# 주요 설정:
-# - Checkpoint 저장: checkpoints/combined_loss_safe/
-# - Loss: Combined (CE 70% + Dice 30%)
-# - Class Weights: sqrt_inv_freq, clipped (0.1~10.0)
-# - LR: 자동으로 30%로 조정됨 (1e-5 → 3e-6)
-# - Gradient Clipping: max_norm=1.0
-# - Dice Smooth: 5.0 (high stability)
-# - Square Denominator: True
-
-# 다른 실험 예시:
-# python my_train.py --experiment_name focal_loss ... (checkpoints/focal_loss/)
-# python my_train.py --experiment_name baseline_v2 ... (checkpoints/baseline_v2/)
-# python my_train.py ... (--experiment_name 없으면 checkpoints/에 저장)
+#     --early_stop_patience 15 \
+#     --early_stop_min_delta 0.001 \
+#     --early_stop_metric "Mean IoU"

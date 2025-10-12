@@ -30,8 +30,9 @@ def validate(opts, model, loader, device, metrics, ret_samples_ids=None,
         denorm: Denormalization function
         
     Returns:
-        score: Validation metrics
+        score: Validation metrics (dict)
         ret_samples: List of sample (image, target, prediction) tuples
+        confusion_mat: Confusion matrix (numpy array)
     """
     metrics.reset()
     ret_samples = []
@@ -103,6 +104,9 @@ def validate(opts, model, loader, device, metrics, ret_samples_ids=None,
 
         score = metrics.get_results()
         
+        # Get confusion matrix for logging
+        confusion_mat = metrics.confusion_matrix.copy()
+        
         # Save summary
         if save_sample_images and epoch is not None:
             summary_path = os.path.join(results_dir, 'validation_summary.txt')
@@ -123,4 +127,4 @@ def validate(opts, model, loader, device, metrics, ret_samples_ids=None,
             
             print(f"Validation results saved to: {results_dir} ({saved_count} comparison images)")
     
-    return score, ret_samples
+    return score, ret_samples, confusion_mat
