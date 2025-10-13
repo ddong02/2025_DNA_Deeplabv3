@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 from my_utils.training_args import get_argparser
 from my_utils.dna2025_dataset import DNA2025Dataset
 from my_utils.validation import validate
-from my_utils.checkpoint import save_checkpoint, load_pretrained_model
+from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint_for_continue
 from my_utils.early_stopping import EarlyStopping
 from my_utils.calculate_class_weights import calculate_class_weights
 from my_utils.losses import CombinedLoss
@@ -89,7 +89,8 @@ def main():
     else:
         print("WandB visualization disabled. Use --enable_vis to enable.")
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
+    # Use GPU 0 by default
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Device: %s" % device)
 
@@ -123,9 +124,9 @@ def main():
     print("Dataset: %s, Train set: %d, Val set: %d" %
           (opts.dataset, len(train_dst), len(val_dst)))
 
-    if opts.total_itrs is None:
-        opts.total_itrs = opts.epochs * len(train_loader)
-        print(f"\nTraining for {opts.epochs} epochs, which is {opts.total_itrs} iterations.")
+    # Calculate total iterations automatically
+    opts.total_itrs = opts.epochs * len(train_loader)
+    print(f"\nTraining for {opts.epochs} epochs, which is {opts.total_itrs} iterations.")
 
     # ===== Setup loss function: Combined Loss + Class Weights (Safe Version) =====
     metrics = StreamSegMetrics(opts.num_classes)
@@ -304,14 +305,29 @@ def main():
         print(f"\n✓ Using default checkpoint directory: {checkpoint_dir}/")
     
     utils.mkdir(checkpoint_dir)
+    
+    # Initialize training variables
+    start_epoch = 1
+    cur_itrs = 0
+    best_score = 0.0
+    
     if opts.ckpt is not None and os.path.isfile(opts.ckpt):
-        model, _ = load_pretrained_model(
-            model, opts.ckpt, 
-            num_classes_old=opts.pretrained_num_classes, 
-            num_classes_new=opts.num_classes
-        )
+        # Check if this is a continue training scenario
+        if opts.continue_training:
+            print("[!] Continue training from checkpoint")
+            # We'll load the checkpoint after setting up optimizer and scheduler
+            continue_from_checkpoint = True
+        else:
+            print("[!] Loading pretrained model")
+            model, _ = load_pretrained_model(
+                model, opts.ckpt, 
+                num_classes_old=opts.pretrained_num_classes, 
+                num_classes_new=opts.num_classes
+            )
+            continue_from_checkpoint = False
     else:
         print("[!] Training from scratch")
+        continue_from_checkpoint = False
 
     # STAGE 1: Freeze backbone
     print("--- STAGE 1 SETUP: Training classifier only ---")
@@ -330,19 +346,20 @@ def main():
         weight_decay=opts.weight_decay
     )
 
-    if opts.lr_policy == 'poly':
-        scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
-    elif opts.lr_policy == 'step':
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=opts.step_size, gamma=0.1
-        )
+    # Use PolyLR scheduler
+    scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
 
     model = nn.DataParallel(model)
     model.to(device)
 
+    # Load checkpoint for continue training if needed
+    if continue_from_checkpoint:
+        start_epoch, cur_itrs, best_score, _ = load_checkpoint_for_continue(
+            opts.ckpt, model, optimizer, scheduler
+        )
+        print(f"Resuming from epoch {start_epoch}, iteration {cur_itrs}")
+
     # Training setup
-    best_score = 0.0
-    cur_itrs = 0
     training_start_time = time.time()
     
     # Track metrics for displaying changes
@@ -375,7 +392,17 @@ def main():
     denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     # ===== TRAINING LOOP =====
-    for epoch in range(1, opts.epochs + 1):
+    # For continue training, adjust the epoch range
+    if continue_from_checkpoint:
+        # Continue training: start from loaded epoch + 1, run for specified additional epochs
+        end_epoch = start_epoch + opts.epochs
+        print(f"Continue training: Epochs {start_epoch + 1} to {end_epoch} (additional {opts.epochs} epochs)")
+    else:
+        # Normal training: start from 1, run for specified epochs
+        end_epoch = opts.epochs
+        start_epoch = 1
+    
+    for epoch in range(start_epoch, end_epoch + 1):
         epoch_start_time = time.time()
         
         # STAGE 2: Unfreeze backbone
@@ -398,30 +425,34 @@ def main():
             print(f"Backbone LR: {backbone_lr:.2e}")
             print(f"Classifier LR: {classifier_lr:.2e}")
 
-            remaining_itrs = opts.total_itrs - cur_itrs
-            if opts.lr_policy == 'poly':
-                scheduler = utils.PolyLR(optimizer, remaining_itrs, power=0.9)
-            elif opts.lr_policy == 'step':
-                scheduler = torch.optim.lr_scheduler.StepLR(
-                    optimizer, step_size=opts.step_size, gamma=0.1
-                )
+            remaining_itrs = max(1, opts.total_itrs - cur_itrs)  # 최소 1로 보장
+            # Use PolyLR scheduler for Stage 2
+            scheduler = utils.PolyLR(optimizer, remaining_itrs, power=0.9)
             
             # Reset early stopping to start fresh from Stage 2
             if early_stopping is not None:
                 early_stopping.reset()
                 print(f"[Early Stopping] Reset for Stage 2 - will set baseline after this epoch's validation")
         
+        # Handle continue training from STAGE 2
+        elif continue_from_checkpoint and epoch > opts.unfreeze_epoch:
+            print(f"\n--- Continue training in STAGE 2 (Epoch {epoch}) ---")
+            # Ensure backbone is unfrozen for continue training in Stage 2
+            for param in model.module.backbone.parameters():
+                param.requires_grad = True
+            print("Backbone already unfrozen for Stage 2 continue training")
+        
         # Print current learning rate
         if len(optimizer.param_groups) == 1:
             current_lr = optimizer.param_groups[0]['lr']
             print(f"\n{'='*80}")
-            print(f"Epoch {epoch}/{opts.epochs} - Current Learning Rate: {current_lr:.6f}")
+            print(f"Epoch {epoch}/{end_epoch} - Current Learning Rate: {current_lr:.6f}")
             print(f"{'='*80}")
         else:
             backbone_lr = optimizer.param_groups[0]['lr']
             classifier_lr = optimizer.param_groups[1]['lr']
             print(f"\n{'='*80}")
-            print(f"Epoch {epoch}/{opts.epochs} - Learning Rates:")
+            print(f"Epoch {epoch}/{end_epoch} - Learning Rates:")
             print(f"  Backbone:   {backbone_lr:.6f}")
             print(f"  Classifier: {classifier_lr:.6f}")
             print(f"{'='*80}")
@@ -433,7 +464,7 @@ def main():
         interval_loss = 0.0
         
         stage_str = '2 (Fine-tuning)' if epoch >= opts.unfreeze_epoch else '1 (Classifier only)'
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{opts.epochs} [Stage {stage_str}]")
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{end_epoch} [Stage {stage_str}]")
         
         for images, labels in progress_bar:
             cur_itrs += 1
@@ -449,7 +480,17 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             optimizer.step()
-            scheduler.step()
+            
+            # Safe scheduler step to avoid complex number errors
+            try:
+                scheduler.step()
+            except (TypeError, ValueError) as e:
+                if "complex" in str(e).lower() or "not supported" in str(e).lower():
+                    # Skip scheduler step if complex number error occurs
+                    # This happens when last_epoch > max_iters in PolyLR
+                    pass
+                else:
+                    raise e
 
             np_loss = loss.detach().cpu().numpy()
             epoch_loss += np_loss
@@ -463,7 +504,7 @@ def main():
 
         avg_epoch_loss = epoch_loss / num_batches
         
-        print(f"\nEpoch {epoch}/{opts.epochs} [{stage_str}] completed:")
+        print(f"\nEpoch {epoch}/{end_epoch} [{stage_str}] completed:")
         print(f"  Average Loss: {avg_epoch_loss:.6f}")
         if len(optimizer.param_groups) == 1:
             print(f"  Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
@@ -544,7 +585,7 @@ def main():
                 
                 if should_stop:
                     print(f"\n{'='*80}")
-                    print(f"Training stopped early at epoch {epoch}/{opts.epochs}")
+                    print(f"Training stopped early at epoch {epoch}/{end_epoch}")
                     print(f"Best {opts.early_stop_metric}: {early_stopping.best_score:.4f}")
                     print(f"  (Set at Stage 2 start: epoch {opts.unfreeze_epoch})")
                     print(f"{'='*80}\n")
@@ -715,7 +756,7 @@ def main():
         epoch_time = time.time() - epoch_start_time
         total_elapsed = time.time() - training_start_time
         avg_epoch_time = total_elapsed / epoch
-        remaining_epochs = opts.epochs - epoch
+        remaining_epochs = end_epoch - epoch
         estimated_remaining = avg_epoch_time * remaining_epochs
         
         print(f"Epoch {epoch} finished. Best Mean IoU so far: {best_score:.4f}")
@@ -737,9 +778,9 @@ def main():
     total_training_time = time.time() - training_start_time
     print("="*80)
     if early_stopping is not None and early_stopping.early_stop:
-        print(f"Training finished early at epoch {epoch}/{opts.epochs}")
+        print(f"Training finished early at epoch {epoch}/{end_epoch}")
     else:
-        print(f"Training finished successfully - completed all {opts.epochs} epochs")
+        print(f"Training finished successfully - completed all {end_epoch} epochs")
     print(f"Total training time: {format_time(total_training_time)}")
     print(f"Best Mean IoU: {best_score:.4f}")
     print("="*80)
