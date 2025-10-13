@@ -31,7 +31,7 @@ from my_utils.validation import validate
 from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint_for_continue
 from my_utils.early_stopping import EarlyStopping
 from my_utils.calculate_class_weights import calculate_class_weights
-from my_utils.losses import CombinedLoss
+from my_utils.losses import CombinedLoss, FocalLoss
 
 
 def get_dataset(opts):
@@ -272,18 +272,35 @@ def main():
     print(f"Classes unchanged: {sum(1 for w in class_weights if w.item() not in [min_weight_threshold, max_weight_threshold])}")
     print("="*80)
     
-    # Use CE Loss with Class Weights (Dice Loss removed due to divergence)
-    criterion = nn.CrossEntropyLoss(
-        weight=class_weights,
-        ignore_index=255,
-        reduction='mean'
-    )
-    
-    print("\n✓ Loss Function Configuration:")
-    print(f"  Type: Weighted Cross-Entropy Loss")
-    print(f"  Class Weights: Applied (sqrt_inv_freq method)")
-    print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
-    print(f"  This configuration balances class importance while maintaining stability")
+    # Loss function selection based on opts.loss_type
+    if opts.loss_type == 'focal':
+        criterion = FocalLoss(
+            alpha=class_weights,
+            gamma=opts.focal_gamma,
+            ignore_index=255
+        )
+        
+        print("\n✓ Loss Function Configuration:")
+        print(f"  Type: Focal Loss")
+        print(f"  Gamma (focusing parameter): {opts.focal_gamma}")
+        print(f"  Class Weights: Applied (sqrt_inv_freq method)")
+        print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
+        print(f"  How it works: Focuses on hard examples by down-weighting easy examples")
+        print(f"  Expected benefit: Better performance on minority classes and hard boundaries")
+    else:
+        # Default: Weighted Cross-Entropy Loss
+        criterion = nn.CrossEntropyLoss(
+            weight=class_weights,
+            ignore_index=255,
+            reduction='mean'
+        )
+        
+        print("\n✓ Loss Function Configuration:")
+        print(f"  Type: Weighted Cross-Entropy Loss")
+        print(f"  Class Weights: Applied (sqrt_inv_freq method)")
+        print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
+        print(f"  This configuration balances class importance while maintaining stability")
+
     print("="*80 + "\n")
 
     # Set up model
@@ -794,22 +811,49 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+
 # python my_train.py \
-#     --ckpt checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
+#     --ckpt checkpoints/ce_only2/best_model.pth \
+#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --data_root ./datasets/data \
-#     --experiment_name "ce_only2" \
-#     --epochs 200 \
+#     --experiment_name "focal_loss_gamma2_conservative" \
+#     --epochs 50 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
-#     --lr 0.001 \
+#     --lr 0.00001 \
 #     --crop_size 1024 \
+#     --loss_type focal \
+#     --focal_gamma 2.0 \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "ce-classweights-only2" \
-#     --wandb_notes "LR restored to 100%, class weights clipped to 10x ratio, confusion matrix logging enabled" \
-#     --wandb_tags "ce_only,improved,confusion_matrix,lr_restore,change_ratio" \
+#     --wandb_name "focal-loss-gamma2-conservative" \
+#     --wandb_notes "Focal Loss (gamma=2.0) with conservative LR=0.00001, 50 epochs test" \
+#     --wandb_tags "focal_loss,gamma2,fine_tuning,from_ce,conservative_lr,test_50epochs" \
+#     --early_stop \
+#     --early_stop_patience 10 \
+#     --early_stop_min_delta 0.001 \
+#     --early_stop_metric "Mean IoU" \
+#     --save_val_results
+
+# python my_train.py \
+#     --ckpt checkpoints/ce_only2/best_model.pth \
+#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
+#     --data_root ./datasets/data \
+#     --experiment_name "focal_loss_gamma1_5" \
+#     --epochs 100 \
+#     --batch_size 4 \
+#     --val_batch_size 4 \
+#     --lr 0.00001 \
+#     --crop_size 1024 \
+#     --loss_type focal \
+#     --focal_gamma 1.5 \
+#     --enable_vis \
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_name "focal-loss-gamma1.5 for performance comparison" \
+#     --wandb_notes "Focal Loss (gamma=1.5)" \
+#     --wandb_tags "focal_loss,gamma1.5,fine_tuning,from_ce,conservative_lr,test_50epochs" \
 #     --early_stop \
 #     --early_stop_patience 15 \
 #     --early_stop_min_delta 0.001 \
-#     --early_stop_metric "Mean IoU"
+#     --early_stop_metric "Mean IoU" \
+#     --save_val_results

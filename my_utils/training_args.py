@@ -98,5 +98,13 @@ def get_argparser():
                              "If not specified, calculate and save to 'class_weights/{dataset}_{method}.pth'")
     parser.add_argument("--skip_save_class_weights", action='store_true', default=False,
                         help="Skip saving calculated class weights to file")
+    
+    # Loss function options
+    parser.add_argument("--loss_type", type=str, default='ce',
+                        choices=['ce', 'focal'],
+                        help="Loss function type: 'ce' for Cross-Entropy, 'focal' for Focal Loss")
+    parser.add_argument("--focal_gamma", type=float, default=2.0,
+                        help="Gamma parameter for Focal Loss (default: 2.0). "
+                             "Higher values focus more on hard examples. Typical range: [0.5, 5.0]")
 
     return parser

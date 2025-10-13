@@ -130,3 +130,67 @@ class CombinedLoss(nn.Module):
         total_loss = self.ce_weight * ce + self.dice_weight * dice
         
         return total_loss
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss with proper class weights support for semantic segmentation.
+    
+    Formula: FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
+    
+    Args:
+        alpha (torch.Tensor, optional): Class weights tensor. Shape: (num_classes,)
+        gamma (float): Focusing parameter. Higher gamma = more focus on hard examples. Default: 2.0
+        ignore_index (int): Label value to ignore in loss calculation. Default: 255
+    
+    References:
+        Lin et al. "Focal Loss for Dense Object Detection" (ICCV 2017)
+    """
+    def __init__(self, alpha=None, gamma=2.0, ignore_index=255):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha  # Class weights tensor: (num_classes,)
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+    
+    def forward(self, logits, targets):
+        """
+        Args:
+            logits: (B, C, H, W) - raw model outputs
+            targets: (B, H, W) - ground truth labels
+        
+        Returns:
+            loss: scalar tensor
+        """
+        # Compute CE loss without reduction to apply focal term per-pixel
+        ce_loss = F.cross_entropy(
+            logits, targets, 
+            reduction='none',
+            ignore_index=self.ignore_index
+        )  # Shape: (B, H, W)
+        
+        # Compute focal term: (1 - p_t)^gamma
+        # p_t is the probability of the true class
+        pt = torch.exp(-ce_loss)  # Shape: (B, H, W)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        
+        # Apply class weights if provided
+        if self.alpha is not None:
+            # Create valid mask for non-ignore pixels
+            valid_mask = (targets != self.ignore_index)
+            
+            # Clamp targets to valid range [0, num_classes-1] to avoid index out of bounds
+            targets_clamped = torch.clamp(targets, 0, len(self.alpha) - 1)
+            
+            # Get weight for each pixel based on its class
+            alpha_t = self.alpha[targets_clamped]  # Shape: (B, H, W)
+            
+            # Apply valid mask to weights
+            alpha_t = torch.where(
+                valid_mask,
+                alpha_t,
+                torch.zeros_like(alpha_t)
+            )
+            focal_loss = alpha_t * focal_loss
+        
+        # Average over valid pixels only
+        return focal_loss.mean()
