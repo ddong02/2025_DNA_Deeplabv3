@@ -28,10 +28,10 @@ import matplotlib.pyplot as plt
 from my_utils.training_args import get_argparser
 from my_utils.dna2025_dataset import DNA2025Dataset
 from my_utils.validation import validate
-from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint
+from my_utils.checkpoint import save_checkpoint, load_pretrained_model
 from my_utils.early_stopping import EarlyStopping
 from my_utils.calculate_class_weights import calculate_class_weights
-from my_utils.losses import CombinedLoss, FocalLoss
+from my_utils.losses import CombinedLoss
 
 
 def get_dataset(opts):
@@ -41,8 +41,7 @@ def get_dataset(opts):
         crop_size=[opts.crop_size, opts.crop_size],
         subset='train',
         scale_range=[0.75, 1.25],
-        random_seed=opts.random_seed,
-        subset_ratio=getattr(opts, 'subset_ratio', 1.0)
+        random_seed=opts.random_seed
     )
     
     val_dst = DNA2025Dataset(
@@ -50,8 +49,7 @@ def get_dataset(opts):
         crop_size=[opts.crop_size, opts.crop_size],
         subset='val',
         scale_range=None,
-        random_seed=opts.random_seed,
-        subset_ratio=getattr(opts, 'subset_ratio', 1.0)
+        random_seed=opts.random_seed
     )
 
     return train_dst, val_dst
@@ -91,8 +89,7 @@ def main():
     else:
         print("WandB visualization disabled. Use --enable_vis to enable.")
 
-    # Use GPU 0 by default
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Device: %s" % device)
 
@@ -126,9 +123,9 @@ def main():
     print("Dataset: %s, Train set: %d, Val set: %d" %
           (opts.dataset, len(train_dst), len(val_dst)))
 
-    # Calculate total iterations automatically
-    opts.total_itrs = opts.epochs * len(train_loader)
-    print(f"\nTraining for {opts.epochs} epochs, which is {opts.total_itrs} iterations.")
+    if opts.total_itrs is None:
+        opts.total_itrs = opts.epochs * len(train_loader)
+        print(f"\nTraining for {opts.epochs} epochs, which is {opts.total_itrs} iterations.")
 
     # ===== Setup loss function: Combined Loss + Class Weights (Safe Version) =====
     metrics = StreamSegMetrics(opts.num_classes)
@@ -274,35 +271,18 @@ def main():
     print(f"Classes unchanged: {sum(1 for w in class_weights if w.item() not in [min_weight_threshold, max_weight_threshold])}")
     print("="*80)
     
-    # Loss function selection based on opts.loss_type
-    if opts.loss_type == 'focal':
-        criterion = FocalLoss(
-            alpha=class_weights,
-            gamma=opts.focal_gamma,
-            ignore_index=255
-        )
-        
-        print("\n✓ Loss Function Configuration:")
-        print(f"  Type: Focal Loss")
-        print(f"  Gamma (focusing parameter): {opts.focal_gamma}")
-        print(f"  Class Weights: Applied (sqrt_inv_freq method)")
-        print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
-        print(f"  How it works: Focuses on hard examples by down-weighting easy examples")
-        print(f"  Expected benefit: Better performance on minority classes and hard boundaries")
-    else:
-        # Default: Weighted Cross-Entropy Loss
-        criterion = nn.CrossEntropyLoss(
-            weight=class_weights,
-            ignore_index=255,
-            reduction='mean'
-        )
-        
-        print("\n✓ Loss Function Configuration:")
-        print(f"  Type: Weighted Cross-Entropy Loss")
-        print(f"  Class Weights: Applied (sqrt_inv_freq method)")
-        print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
-        print(f"  This configuration balances class importance while maintaining stability")
-
+    # Use CE Loss with Class Weights (Dice Loss removed due to divergence)
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights,
+        ignore_index=255,
+        reduction='mean'
+    )
+    
+    print("\n✓ Loss Function Configuration:")
+    print(f"  Type: Weighted Cross-Entropy Loss")
+    print(f"  Class Weights: Applied (sqrt_inv_freq method)")
+    print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
+    print(f"  This configuration balances class importance while maintaining stability")
     print("="*80 + "\n")
 
     # Set up model
@@ -324,22 +304,14 @@ def main():
         print(f"\n✓ Using default checkpoint directory: {checkpoint_dir}/")
     
     utils.mkdir(checkpoint_dir)
-    pretrained_loaded = False
     if opts.ckpt is not None and os.path.isfile(opts.ckpt):
-        if opts.continue_training:
-            # Continue training - will be handled later
-            pass
-        else:
-            # Load pretrained model
-            model, _ = load_pretrained_model(
-                model, opts.ckpt, 
-                num_classes_old=opts.pretrained_num_classes, 
-                num_classes_new=opts.num_classes
-            )
-            pretrained_loaded = True
+        model, _ = load_pretrained_model(
+            model, opts.ckpt, 
+            num_classes_old=opts.pretrained_num_classes, 
+            num_classes_new=opts.num_classes
+        )
     else:
         print("[!] Training from scratch")
-        continue_from_checkpoint = False
 
     # STAGE 1: Freeze backbone
     print("--- STAGE 1 SETUP: Training classifier only ---")
@@ -358,72 +330,27 @@ def main():
         weight_decay=opts.weight_decay
     )
 
-    # Use PolyLR scheduler
-    scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
+    if opts.lr_policy == 'poly':
+        scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
+    elif opts.lr_policy == 'step':
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=opts.step_size, gamma=0.1
+        )
 
     model = nn.DataParallel(model)
     model.to(device)
 
-    # Load checkpoint for continue training if needed
-    if continue_from_checkpoint:
-        start_epoch, cur_itrs, best_score, _ = load_checkpoint_for_continue(
-            opts.ckpt, model, optimizer, scheduler
-        )
-        print(f"Resuming from epoch {start_epoch}, iteration {cur_itrs}")
-
     # Training setup
     best_score = 0.0
     cur_itrs = 0
-    start_epoch = 1
     training_start_time = time.time()
-    
-    # Continue training from checkpoint if specified
-    if opts.continue_training and opts.ckpt is not None and os.path.isfile(opts.ckpt):
-        print(f"\n=== CONTINUE TRAINING ===")
-        print(f"Resuming from checkpoint: {opts.ckpt}")
-        start_epoch, cur_itrs, best_score = load_checkpoint(
-            opts.ckpt, model, optimizer, scheduler, device
-        )
-        print(f"Training will resume from epoch {start_epoch}")
-        print(f"Current iteration count: {cur_itrs}")
-        print(f"Best score so far: {best_score:.4f}")
-        
-        # Check if training is already complete
-        if start_epoch > opts.epochs:
-            print(f"\n⚠️  WARNING: Training already completed!")
-            print(f"   Current epoch: {start_epoch}")
-            print(f"   Target epochs: {opts.epochs}")
-            print(f"   No additional training needed.")
-            print("="*50 + "\n")
-            return
-        elif start_epoch == opts.epochs:
-            print(f"\n⚠️  WARNING: Training is at the final epoch!")
-            print(f"   Current epoch: {start_epoch}")
-            print(f"   Target epochs: {opts.epochs}")
-            print(f"   Only validation will be performed.")
-            print("="*50 + "\n")
-        else:
-            remaining_epochs = opts.epochs - start_epoch + 1
-            print(f"   Remaining epochs to train: {remaining_epochs}")
-            print("="*50 + "\n")
-    else:
-        # Determine training type
-        if pretrained_loaded:
-            print(f"\n=== STARTING NEW TRAINING ===")
-            print("Training with pretrained weights")
-            print("="*50 + "\n")
-        else:
-            print(f"\n=== STARTING NEW TRAINING ===")
-            print("Training from scratch")
-            print("="*50 + "\n")
     
     # Track metrics for displaying changes
     prev_metrics = {
         'loss': None,
         'Mean IoU': None,
         'Overall Acc': None,
-        'Mean Acc': None,
-        'Class IoU': None
+        'Mean Acc': None
     }
     
     # ===== Early Stopping Setup =====
@@ -448,7 +375,7 @@ def main():
     denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     # ===== TRAINING LOOP =====
-    for epoch in range(start_epoch, opts.epochs + 1):
+    for epoch in range(1, opts.epochs + 1):
         epoch_start_time = time.time()
         
         # STAGE 2: Unfreeze backbone
@@ -471,34 +398,30 @@ def main():
             print(f"Backbone LR: {backbone_lr:.2e}")
             print(f"Classifier LR: {classifier_lr:.2e}")
 
-            remaining_itrs = max(1, opts.total_itrs - cur_itrs)  # 최소 1로 보장
-            # Use PolyLR scheduler for Stage 2
-            scheduler = utils.PolyLR(optimizer, remaining_itrs, power=0.9)
+            remaining_itrs = opts.total_itrs - cur_itrs
+            if opts.lr_policy == 'poly':
+                scheduler = utils.PolyLR(optimizer, remaining_itrs, power=0.9)
+            elif opts.lr_policy == 'step':
+                scheduler = torch.optim.lr_scheduler.StepLR(
+                    optimizer, step_size=opts.step_size, gamma=0.1
+                )
             
             # Reset early stopping to start fresh from Stage 2
             if early_stopping is not None:
                 early_stopping.reset()
                 print(f"[Early Stopping] Reset for Stage 2 - will set baseline after this epoch's validation")
         
-        # Handle continue training from STAGE 2
-        elif continue_from_checkpoint and epoch > opts.unfreeze_epoch:
-            print(f"\n--- Continue training in STAGE 2 (Epoch {epoch}) ---")
-            # Ensure backbone is unfrozen for continue training in Stage 2
-            for param in model.module.backbone.parameters():
-                param.requires_grad = True
-            print("Backbone already unfrozen for Stage 2 continue training")
-        
         # Print current learning rate
         if len(optimizer.param_groups) == 1:
             current_lr = optimizer.param_groups[0]['lr']
             print(f"\n{'='*80}")
-            print(f"Epoch {epoch}/{end_epoch} - Current Learning Rate: {current_lr:.6f}")
+            print(f"Epoch {epoch}/{opts.epochs} - Current Learning Rate: {current_lr:.6f}")
             print(f"{'='*80}")
         else:
             backbone_lr = optimizer.param_groups[0]['lr']
             classifier_lr = optimizer.param_groups[1]['lr']
             print(f"\n{'='*80}")
-            print(f"Epoch {epoch}/{end_epoch} - Learning Rates:")
+            print(f"Epoch {epoch}/{opts.epochs} - Learning Rates:")
             print(f"  Backbone:   {backbone_lr:.6f}")
             print(f"  Classifier: {classifier_lr:.6f}")
             print(f"{'='*80}")
@@ -510,7 +433,7 @@ def main():
         interval_loss = 0.0
         
         stage_str = '2 (Fine-tuning)' if epoch >= opts.unfreeze_epoch else '1 (Classifier only)'
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{end_epoch} [Stage {stage_str}]")
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{opts.epochs} [Stage {stage_str}]")
         
         for images, labels in progress_bar:
             cur_itrs += 1
@@ -526,17 +449,7 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             optimizer.step()
-            
-            # Safe scheduler step to avoid complex number errors
-            try:
-                scheduler.step()
-            except (TypeError, ValueError) as e:
-                if "complex" in str(e).lower() or "not supported" in str(e).lower():
-                    # Skip scheduler step if complex number error occurs
-                    # This happens when last_epoch > max_iters in PolyLR
-                    pass
-                else:
-                    raise e
+            scheduler.step()
 
             np_loss = loss.detach().cpu().numpy()
             epoch_loss += np_loss
@@ -550,7 +463,7 @@ def main():
 
         avg_epoch_loss = epoch_loss / num_batches
         
-        print(f"\nEpoch {epoch}/{end_epoch} [{stage_str}] completed:")
+        print(f"\nEpoch {epoch}/{opts.epochs} [{stage_str}] completed:")
         print(f"  Average Loss: {avg_epoch_loss:.6f}")
         if len(optimizer.param_groups) == 1:
             print(f"  Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
@@ -605,36 +518,15 @@ def main():
         print(f"  Mean Acc:        {current_macc:.4f}{format_change(current_macc, prev_metrics['Mean Acc'])}")
         print(f"{'='*80}")
         
-        # Show detailed class IoU with comparison
+        # Show detailed class IoU (original output)
         print(f"\nDetailed Metrics:")
         print(metrics.to_str(val_score))
-        
-        # Show Class IoU comparison if previous epoch exists
-        if prev_metrics['Class IoU'] is not None:
-            print(f"\nClass IoU Changes from Previous Epoch:")
-            print(f"{'Class':<20} {'Current':<10} {'Previous':<10} {'Change':<10}")
-            print(f"{'-'*50}")
-            
-            current_class_ious = val_score['Class IoU']
-            prev_class_ious = prev_metrics['Class IoU']
-            
-            for class_id in range(len(current_class_ious)):
-                current_iou = current_class_ious[class_id]
-                prev_iou = prev_class_ious[class_id]
-                delta = current_iou - prev_iou
-                
-                arrow = "↑" if delta > 0 else "↓" if delta < 0 else "━"
-                sign = "+" if delta > 0 else ""
-                change_str = f"{arrow} {sign}{delta:.4f}" if abs(delta) >= 0.0001 else "━ ±0.0000"
-                
-                print(f"Class {class_id:<15} {current_iou:<10.4f} {prev_iou:<10.4f} {change_str}")
         
         # Update previous metrics for next epoch
         prev_metrics['loss'] = current_loss
         prev_metrics['Mean IoU'] = current_miou
         prev_metrics['Overall Acc'] = current_oacc
         prev_metrics['Mean Acc'] = current_macc
-        prev_metrics['Class IoU'] = val_score['Class IoU'].copy()
 
         # ===== Early Stopping Check =====
         # Only apply early stopping in Stage 2 (after backbone is unfrozen)
@@ -652,7 +544,7 @@ def main():
                 
                 if should_stop:
                     print(f"\n{'='*80}")
-                    print(f"Training stopped early at epoch {epoch}/{end_epoch}")
+                    print(f"Training stopped early at epoch {epoch}/{opts.epochs}")
                     print(f"Best {opts.early_stop_metric}: {early_stopping.best_score:.4f}")
                     print(f"  (Set at Stage 2 start: epoch {opts.unfreeze_epoch})")
                     print(f"{'='*80}\n")
@@ -743,6 +635,8 @@ def main():
             # Log validation images (if available)
             if ret_samples and len(ret_samples) > 0:
                 samples_to_show = ret_samples[:4]
+                visdom_samples_dir = os.path.join('results', 'visdom_samples')
+                os.makedirs(visdom_samples_dir, exist_ok=True)
                 
                 # Prepare all images first
                 wandb_images = {}
@@ -765,6 +659,14 @@ def main():
                     # Convert CHW to HWC for WandB
                     concat_img_hwc = concat_img.transpose(1, 2, 0)
                     wandb_images[f'Validation Sample {k}'] = wandb.Image(concat_img_hwc, caption=f'Sample {k}')
+                    
+                    # Save locally
+                    save_path = os.path.join(visdom_samples_dir, 
+                                           f'validation_sample_{k}_epoch_{epoch:03d}.png')
+                    try:
+                        Image.fromarray(concat_img_hwc).save(save_path)
+                    except Exception as e:
+                        print(f"Warning: Failed to save visdom sample {k}: {e}")
                 
                 # Log all images at once
                 wandb.log(wandb_images, step=epoch)
@@ -813,7 +715,7 @@ def main():
         epoch_time = time.time() - epoch_start_time
         total_elapsed = time.time() - training_start_time
         avg_epoch_time = total_elapsed / epoch
-        remaining_epochs = end_epoch - epoch
+        remaining_epochs = opts.epochs - epoch
         estimated_remaining = avg_epoch_time * remaining_epochs
         
         print(f"Epoch {epoch} finished. Best Mean IoU so far: {best_score:.4f}")
@@ -835,9 +737,9 @@ def main():
     total_training_time = time.time() - training_start_time
     print("="*80)
     if early_stopping is not None and early_stopping.early_stop:
-        print(f"Training finished early at epoch {epoch}/{end_epoch}")
+        print(f"Training finished early at epoch {epoch}/{opts.epochs}")
     else:
-        print(f"Training finished successfully - completed all {end_epoch} epochs")
+        print(f"Training finished successfully - completed all {opts.epochs} epochs")
     print(f"Total training time: {format_time(total_training_time)}")
     print(f"Best Mean IoU: {best_score:.4f}")
     print("="*80)
@@ -851,75 +753,22 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# python my_train.py \
-#     --ckpt checkpoints/ce_only2/best_model.pth \
-#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
-#     --data_root ./datasets/data \
-#     --experiment_name "focal_loss_gamma2_conservative" \
-#     --epochs 50 \
-#     --batch_size 4 \
-#     --val_batch_size 4 \
-#     --lr 0.00001 \
-#     --crop_size 1024 \
-#     --loss_type focal \
-#     --focal_gamma 2.0 \
-#     --enable_vis \
-#     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "focal-loss-gamma2-conservative" \
-#     --wandb_notes "Focal Loss (gamma=2.0) with conservative LR=0.00001, 50 epochs test" \
-#     --wandb_tags "focal_loss,gamma2,fine_tuning,from_ce,conservative_lr,test_50epochs" \
-#     --early_stop \
-#     --early_stop_patience 10 \
-#     --early_stop_min_delta 0.001 \
-#     --early_stop_metric "Mean IoU" \
-#     --save_val_results
-
-# PC A에서 실행
-# python my_train.py \
-#     --ckpt checkpoints/ce_only2/best_model.pth \
-#     --data_root ./datasets/data \
-#     --experiment_name "focal_loss_gamma1_0" \
-#     --epochs 50 \
-#     --batch_size 4 \
-#     --val_batch_size 4 \
-#     --lr 0.00001 \
-#     --crop_size 1024 \
-#     --loss_type focal \
-#     --focal_gamma 1.0 \
-#     --enable_vis \
-#     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "focal-loss-gamma1.0-extreme-PCA" \
-#     --wandb_notes "Extreme experiment: Gamma=1.0 (weak focusing) on PC A" \
-#     --wandb_tags "focal_loss,gamma1.0,extreme,weak_focusing" \
-#     --early_stop \
-#     --early_stop_patience 10 \
-#     --early_stop_min_delta 0.001 \
-#     --early_stop_metric "Mean IoU" \
-#     --save_val_results \
-#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth
-
-# PC B에서 실행
-# python my_train.py \
-#     --ckpt checkpoints/ce_only2/best_model.pth \
-#     --data_root ./datasets/data \
-#     --experiment_name "focal_loss_gamma3_0" \
-#     --epochs 50 \
-#     --batch_size 4 \
-#     --val_batch_size 4 \
-#     --lr 0.00001 \
-#     --crop_size 1024 \
-#     --loss_type focal \
-#     --focal_gamma 3.0 \
-#     --enable_vis \
-#     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "focal-loss-gamma3.0-extreme-PC Main" \
-#     --wandb_notes "Extreme experiment: Gamma=3.0 (strong focusing) on PC Main" \
-#     --wandb_tags "focal_loss,gamma3.0,extreme,strong_focusing" \
-#     --early_stop \
-#     --early_stop_patience 10 \
-#     --early_stop_min_delta 0.001 \
-#     --early_stop_metric "Mean IoU" \
-#     --save_val_results \
-#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth
     
+# python my_train.py \
+#     --ckpt checkpoints/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
+#     --data_root ./datasets/data \
+#     --experiment_name "ce_only2" \
+#     --epochs 200 \
+#     --batch_size 4 \
+#     --val_batch_size 4 \
+#     --lr 0.001 \
+#     --crop_size 1024 \
+#     --enable_vis \
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_name "ce-classweights-only2" \
+#     --wandb_notes "LR restored to 100%, class weights clipped to 10x ratio, confusion matrix logging enabled" \
+#     --wandb_tags "ce_only,improved,confusion_matrix,lr_restore,change_ratio" \
+#     --early_stop \
+#     --early_stop_patience 15 \
+#     --early_stop_min_delta 0.001 \
+#     --early_stop_metric "Mean IoU"

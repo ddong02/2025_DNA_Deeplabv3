@@ -28,6 +28,11 @@ def save_checkpoint(path, epoch, cur_itrs, model, optimizer, scheduler, best_sco
         base_path, ext = os.path.splitext(path)
         path = f"{base_path}_epoch{epoch:03d}{ext}"
     
+    # Extract current learning rates from optimizer
+    current_lrs = []
+    for param_group in optimizer.param_groups:
+        current_lrs.append(param_group['lr'])
+    
     torch.save({
         "epoch": epoch,
         "cur_itrs": cur_itrs,
@@ -35,6 +40,7 @@ def save_checkpoint(path, epoch, cur_itrs, model, optimizer, scheduler, best_sco
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
         "best_score": best_score,
+        "current_lrs": current_lrs,  # Save current learning rates
     }, path)
     print(f"Model saved as {path}")
 

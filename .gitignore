@@ -17,7 +17,6 @@ test_visualizations/
 results_deeplabv3/
 FLOPs.txt
 datasets/
-test_results_wandb/
 wandb/
 class_weights/
 test_results_folder/
