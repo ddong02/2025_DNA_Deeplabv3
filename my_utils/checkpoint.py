@@ -75,3 +75,66 @@ def load_pretrained_model(model, checkpoint_path, num_classes_old, num_classes_n
     model.load_state_dict(new_state_dict, strict=False)
     print("Pretrained weights loaded successfully!\n")
     return model, checkpoint
+
+
+def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
+    """
+    Load checkpoint for resuming training.
+    
+    Args:
+        checkpoint_path: Path to checkpoint file
+        model: Model to load state into
+        optimizer: Optimizer to load state into
+        scheduler: Scheduler to load state into
+        device: Device to load checkpoint on
+        
+    Returns:
+        start_epoch: Epoch to resume from
+        cur_itrs: Current iteration count
+        best_score: Best validation score so far
+    """
+    print(f"\n=== Loading Checkpoint for Resume ===")
+    print(f"Checkpoint: {checkpoint_path}")
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    
+    # Load model state
+    model_state = checkpoint["model_state"]
+    
+    # Handle DataParallel model loading
+    if hasattr(model, 'module'):
+        # Model is wrapped with DataParallel, state_dict should have 'module.' prefix
+        model.load_state_dict(model_state, strict=False)
+    else:
+        # Model is not wrapped, remove 'module.' prefix if present
+        if any(key.startswith('module.') for key in model_state.keys()):
+            new_state_dict = {}
+            for key, value in model_state.items():
+                if key.startswith('module.'):
+                    new_key = key[7:]  # Remove 'module.' prefix
+                    new_state_dict[new_key] = value
+                else:
+                    new_state_dict[key] = value
+            model.load_state_dict(new_state_dict, strict=False)
+        else:
+            model.load_state_dict(model_state, strict=False)
+    
+    print("✓ Model state loaded")
+    
+    # Load optimizer state
+    optimizer.load_state_dict(checkpoint["optimizer_state"])
+    print("✓ Optimizer state loaded")
+    
+    # Load scheduler state
+    scheduler.load_state_dict(checkpoint["scheduler_state"])
+    print("✓ Scheduler state loaded")
+    
+    # Get training state
+    start_epoch = checkpoint.get("epoch", 0) + 1  # Resume from next epoch
+    cur_itrs = checkpoint.get("cur_itrs", 0)
+    best_score = checkpoint.get("best_score", 0.0)
+    
+    print(f"✓ Training state: Epoch {start_epoch}, Iterations {cur_itrs}, Best Score {best_score:.4f}")
+    print("Checkpoint loaded successfully!\n")
+    
+    return start_epoch, cur_itrs, best_score

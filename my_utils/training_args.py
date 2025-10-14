@@ -115,5 +115,10 @@ def get_argparser():
                              "If not specified, calculate and save to 'class_weights/{dataset}_{method}.pth'")
     parser.add_argument("--skip_save_class_weights", action='store_true', default=False,
                         help="Skip saving calculated class weights to file")
+    
+    # Dataset subset 관련 인자
+    parser.add_argument("--subset_ratio", type=float, default=1.0,
+                        help="Ratio of dataset to use for training (0.0-1.0, default: 1.0 for full dataset). "
+                             "Useful for quick testing (e.g., 0.05 for 5% of data)")
 
     return parser
