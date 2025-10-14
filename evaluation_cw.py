@@ -1,93 +1,3 @@
-# import os
-# import argparse
-# import numpy as np
-# from PIL import Image
-# from glob import glob
-# from tqdm import tqdm
-# from sklearn.metrics import confusion_matrix
-
-# def load_image(path):
-#     return np.array(Image.open(path)).astype(np.uint8)
-
-# def compute_miou(confusion, num_classes):
-#     ious = []
-#     for cls in range(num_classes):
-#         TP = confusion[cls, cls]
-#         FP = confusion[:, cls].sum() - TP
-#         FN = confusion[cls, :].sum() - TP
-        
-#         denom = TP + FP + FN
-#         if denom == 0:
-#             iou = float('nan')
-#         else:
-#             iou = TP / denom
-#         ious.append(iou)
-    
-#     miou = np.nanmean(ious)
-#     return miou, ious
-
-# def evaluate(result_dir, label_dir, num_classes):
-#     # ✍️ 수정된 부분: glob이 하위 폴더까지 모두 검색하도록 recursive=True 옵션 추가
-#     pred_paths = sorted(glob(os.path.join(result_dir, "**", "*_leftImg8bit.png"), recursive=True))
-#     print(f'Found {len(pred_paths)} segmentation result images in {result_dir}')
-    
-#     if not pred_paths:
-#         print("Error: No prediction files found. Please check the 'result_dir' path and file names.")
-#         return None, None
-
-#     all_confusion = np.zeros((num_classes, num_classes), dtype=np.int64)
-
-#     for pred_path in tqdm(pred_paths, desc="Evaluating"):
-#         # 예측 파일이 있는 폴더 이름(예: 'set1')을 가져와서 정답 경로를 만듭니다.
-#         sub_folder = Path(pred_path).parent.name
-#         file_id = os.path.basename(pred_path).replace("_leftImg8bit.png", "")
-        
-#         # 정답 레이블 파일 경로를 동적으로 생성
-#         label_path = os.path.join(label_dir, sub_folder, f"{file_id}_gtFine_CategoryId.png")
-
-#         if not os.path.exists(label_path):
-#             print(f"Label not found at {label_path}, skipping.")
-#             continue
-
-#         pred = load_image(pred_path).flatten()
-#         label = load_image(label_path).flatten()
-
-#         mask = label != 255
-#         pred = pred[mask]
-#         label = label[mask]
-        
-#         # 라벨과 예측 값의 범위가 num_classes를 벗어나지 않도록 클리핑
-#         pred = np.clip(pred, 0, num_classes - 1)
-#         label = np.clip(label, 0, num_classes - 1)
-
-#         conf = confusion_matrix(label, pred, labels=list(range(num_classes)))
-#         all_confusion += conf
-
-#     miou, ious = compute_miou(all_confusion, num_classes)
-    
-#     print(f"\n📊 mIoU: {miou:.4f}")
-#     for i, iou in enumerate(ious):
-#         print(f"Class {i}: IoU = {iou:.4f}" if not np.isnan(iou) else f"Class {i}: IoU = NaN (ignored)")
-
-#     return miou, ious
-
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser(description="Calculate mIoU for semantic segmentation results.")
-    
-#     # ✍️ 수정된 부분: 기본 경로를 사용자의 폴더 구조에 맞게 수정
-#     # 예측 결과가 저장된 상위 폴더 (예: C:/ETRI/result/test)
-#     parser.add_argument("--result_dir", type=str, default="C:/ETRI/result/test", 
-#                         help="Predicted *_leftImg8bit.png files가 있는 상위 디렉토리")
-#     # 정답 레이블이 있는 상위 폴더 (예: C:/ETRI/data/labelmap/test)
-#     parser.add_argument("--label_dir", type=str, default="C:/ETRI/data/labelmap/test", 
-#                         help="정답 레이블 *_gtFine_CategoryId.png files가 있는 상위 디렉토리")
-#     parser.add_argument("--num_classes", type=int, default=19, help="세그먼테이션 클래스 수")
-
-#     args = parser.parse_args()
-    
-#     evaluate(args.result_dir, args.label_dir, args.num_classes)
-
-
 import os
 import argparse
 import numpy as np
@@ -99,6 +9,31 @@ from pathlib import Path
 
 def load_image(path):
     return np.array(Image.open(path)).astype(np.uint8)
+
+def _find_label_path(file_basename, label_dir):
+    """Find corresponding label file for a given image basename"""
+    # Remove _leftImg8bit suffix if present
+    if "_leftImg8bit" in file_basename:
+        file_basename = file_basename.replace("_leftImg8bit", "")
+    
+    # Try different label naming conventions (from my_test.py)
+    possible_label_names = [
+        f"{file_basename}_gtFine_CategoryId.png",  # For set1: Daeduk_000009_gtFine_CategoryId.png
+        f"{file_basename}_CategoryId.png",          # For cam folders: round(...)_CategoryId.png
+        f"{file_basename}_labelmap.png",
+        f"{file_basename}.png"
+    ]
+    
+    # Search in all subdirectories of label_dir
+    for label_name in possible_label_names:
+        # Search recursively in label_dir
+        label_paths = []
+        label_paths.extend(glob(os.path.join(label_dir, "**", label_name), recursive=True))
+        
+        if label_paths:
+            return label_paths[0]  # Return first match
+    
+    return None
 
 def compute_miou(confusion, num_classes):
     """
@@ -135,7 +70,13 @@ def compute_miou(confusion, num_classes):
     return miou_all, miou_positive, ious
 
 def evaluate(result_dir, label_dir, num_classes):
-    pred_paths = sorted(glob(os.path.join(result_dir, "**", "*_leftImg8bit.png"), recursive=True))
+    # 모든 PNG, JPG 파일을 찾기
+    pred_paths = []
+    pred_paths.extend(glob(os.path.join(result_dir, "**", "*.png"), recursive=True))
+    pred_paths.extend(glob(os.path.join(result_dir, "**", "*.jpg"), recursive=True))
+    pred_paths.extend(glob(os.path.join(result_dir, "**", "*.jpeg"), recursive=True))
+    pred_paths = sorted(pred_paths)
+    
     print(f'Found {len(pred_paths)} segmentation result images in {result_dir}')
     
     if not pred_paths:
@@ -145,17 +86,32 @@ def evaluate(result_dir, label_dir, num_classes):
     all_confusion = np.zeros((num_classes, num_classes), dtype=np.int64)
 
     for pred_path in tqdm(pred_paths, desc="Evaluating"):
-        sub_folder = Path(pred_path).parent.name
-        file_id = os.path.basename(pred_path).replace("_leftImg8bit.png", "")
+        # 파일명에서 확장자 제거하여 기본 파일명 추출
+        file_basename = os.path.splitext(os.path.basename(pred_path))[0]
         
-        label_path = os.path.join(label_dir, sub_folder, f"{file_id}_gtFine_CategoryId.png")
-
-        if not os.path.exists(label_path):
-            print(f"Label not found at {label_path}, skipping.")
+        # my_test.py의 _get_label_path 로직을 참고하여 레이블 파일 찾기
+        label_path = _find_label_path(file_basename, label_dir)
+        
+        if not label_path or not os.path.exists(label_path):
+            print(f"Label not found for {file_basename}, skipping.")
             continue
 
-        pred = load_image(pred_path).flatten()
-        label = load_image(label_path).flatten()
+        # 이미지 로드
+        pred_img = Image.open(pred_path)
+        label_img = Image.open(label_path)
+        
+        # 크기가 다르면 레이블 이미지를 예측 이미지 크기로 리사이즈
+        if pred_img.size != label_img.size:
+            print(f"Resizing label from {label_img.size} to {pred_img.size}")
+            label_img = label_img.resize(pred_img.size, Image.NEAREST)
+        
+        # numpy 배열로 변환
+        pred = np.array(pred_img).astype(np.uint8)
+        label = np.array(label_img).astype(np.uint8)
+        
+        # 1차원으로 변환
+        pred = pred.flatten()
+        label = label.flatten()
 
         mask = label != 255
         pred = pred[mask]

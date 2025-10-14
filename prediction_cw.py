@@ -138,3 +138,5 @@ if __name__ == "__main__":
     os.makedirs(args.result_dir, exist_ok=True)
     
     test(args)
+    
+    # python prediction_cw.py --result_dir result_deeplab_non_norm
