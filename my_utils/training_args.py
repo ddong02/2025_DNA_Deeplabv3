@@ -87,7 +87,7 @@ def get_argparser():
     # WandB (Weights & Biases) options
     parser.add_argument("--enable_vis", action='store_true', default=False,
                         help="use WandB for visualization and logging")
-    parser.add_argument("--wandb_project", type=str, default='deeplabv3-semantic-segmentation',
+    parser.add_argument("--wandb_project", type=str, default='deeplabv3-segmentation',
                         help='WandB project name')
     parser.add_argument("--wandb_name", type=str, default=None,
                         help='WandB run name (default: auto-generated)')
@@ -120,5 +120,10 @@ def get_argparser():
     parser.add_argument("--subset_ratio", type=float, default=1.0,
                         help="Ratio of dataset to use for training (0.0-1.0, default: 1.0 for full dataset). "
                              "Useful for quick testing (e.g., 0.05 for 5% of data)")
+    
+    # Class weights optimization 관련 인자
+    parser.add_argument("--target_max_ratio", type=float, default=10.0,
+                        help="Maximum ratio for class weights clipping (default: 10.0). "
+                             "Used for WandB sweep optimization.")
 
     return parser

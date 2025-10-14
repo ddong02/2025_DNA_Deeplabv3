@@ -21,3 +21,4 @@ test_results_wandb/
 wandb/
 class_weights/
 test_results_folder/
+overlay_output/

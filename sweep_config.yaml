@@ -1,0 +1,79 @@
+# WandB Sweep Configuration for Learning Rate and Target Max Ratio Optimization
+# This configuration optimizes two key hyperparameters for fine-tuning with Weighted CE Loss
+
+program: my_train.py
+method: bayes
+metric:
+  goal: maximize
+  name: "[Val] Mean IoU"
+project: "deeplabv3-segmentation"
+
+# Fixed parameters (not optimized)
+parameters:
+  # Dataset and model parameters
+  dataset:
+    value: "dna2025dataset"
+  data_root:
+    value: "./datasets/data"
+  model:
+    value: "deeplabv3_mobilenet"
+  num_classes:
+    value: 19
+  pretrained_num_classes:
+    value: 19
+  output_stride:
+    value: 16
+  
+  # Training parameters
+  epochs:
+    value: 50  # Reduced for faster sweep
+  unfreeze_epoch:
+    value: 16
+  batch_size:
+    value: 4
+  val_batch_size:
+    value: 4
+  crop_size:
+    value: 1024
+  experiment_name:
+    value: "weighted_ce_sweep"
+  # Checkpoint (required)
+  ckpt:
+    value: "./checkpoints/ce_only2/best_model.pth"
+  
+  # WandB settings (removed enable_vis flag to avoid boolean issues)
+  wandb_tags:
+    value: "sweep,lr_optimization,class_weights"
+  
+  # Early stopping for efficiency (removed early_stop flag to avoid boolean issues)
+  early_stop_patience:
+    value: 8
+  early_stop_min_delta:
+    value: 0.001
+  early_stop_metric:
+    value: "Mean IoU"
+  
+  # Fixed training parameters
+  lr_policy:
+    value: "poly"
+  weight_decay:
+    value: 0.0001
+  random_seed:
+    value: 1
+  print_interval:
+    value: 10
+  
+  # Class weights parameters
+  class_weights_file:
+    value: "class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth"
+
+  # Parameters to optimize
+  lr:
+    distribution: log_uniform_values
+    min: 0.0000001
+    max: 0.00001
+  
+  target_max_ratio:
+    distribution: uniform
+    min: 5.0
+    max: 15.0
