@@ -83,51 +83,49 @@ def load_pretrained_model(model, checkpoint_path, num_classes_old, num_classes_n
     return model, checkpoint
 
 
-def load_checkpoint_for_continue(checkpoint_path, model, optimizer, scheduler):
+def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
     """
-    Load checkpoint for continuing training with restored learning rates.
+    Load checkpoint for resuming training.
     
     Args:
         checkpoint_path: Path to checkpoint file
-        model: Model to load weights into
-        optimizer: Optimizer to restore state
-        scheduler: Scheduler to restore state
+        model: Model to load state into
+        optimizer: Optimizer to load state into
+        scheduler: Scheduler to load state into
+        device: Device to load checkpoint on
         
     Returns:
-        epoch: Epoch number from checkpoint
-        cur_itrs: Current iteration from checkpoint
-        best_score: Best score from checkpoint
-        current_lrs: Current learning rates from checkpoint
+        start_epoch: Epoch to resume from
+        cur_itrs: Current iteration count
+        best_score: Best validation score so far
     """
-    print(f"\n=== Loading Checkpoint for Continue ===")
+    print(f"\n=== Loading Checkpoint for Resume ===")
     print(f"Checkpoint: {checkpoint_path}")
     
-    checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'), 
-                          weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     # Load model state
-    try:
-        model.load_state_dict(checkpoint["model_state"])
-        print("✓ Model state loaded")
-    except RuntimeError as e:
-        if "Missing key(s)" in str(e) and "module." in str(e):
-            print("⚠ DataParallel key mismatch detected, trying to fix...")
-            # Try loading without DataParallel wrapper
-            model.module.load_state_dict(checkpoint["model_state"])
-            print("✓ Model state loaded (fixed DataParallel issue)")
-            
-            # Verify model loading by checking a few key parameters
-            try:
-                # Check if backbone parameters are loaded correctly
-                backbone_params = list(model.module.backbone.parameters())
-                if len(backbone_params) > 0:
-                    print(f"✓ Model verification: {len(backbone_params)} backbone parameters loaded")
+    model_state = checkpoint["model_state"]
+    
+    # Handle DataParallel model loading
+    if hasattr(model, 'module'):
+        # Model is wrapped with DataParallel, state_dict should have 'module.' prefix
+        model.load_state_dict(model_state, strict=False)
+    else:
+        # Model is not wrapped, remove 'module.' prefix if present
+        if any(key.startswith('module.') for key in model_state.keys()):
+            new_state_dict = {}
+            for key, value in model_state.items():
+                if key.startswith('module.'):
+                    new_key = key[7:]  # Remove 'module.' prefix
+                    new_state_dict[new_key] = value
                 else:
-                    print("⚠ Warning: No backbone parameters found")
-            except Exception as verify_e:
-                print(f"⚠ Model verification failed: {verify_e}")
+                    new_state_dict[key] = value
+            model.load_state_dict(new_state_dict, strict=False)
         else:
-            raise e
+            model.load_state_dict(model_state, strict=False)
+    
+    print("✓ Model state loaded")
     
     # Load optimizer state
     optimizer.load_state_dict(checkpoint["optimizer_state"])
@@ -137,23 +135,12 @@ def load_checkpoint_for_continue(checkpoint_path, model, optimizer, scheduler):
     scheduler.load_state_dict(checkpoint["scheduler_state"])
     print("✓ Scheduler state loaded")
     
-    # Extract information
-    epoch = checkpoint.get("epoch", 0)
+    # Get training state
+    start_epoch = checkpoint.get("epoch", 0) + 1  # Resume from next epoch
     cur_itrs = checkpoint.get("cur_itrs", 0)
     best_score = checkpoint.get("best_score", 0.0)
-    current_lrs = checkpoint.get("current_lrs", [])
     
-    print(f"✓ Epoch: {epoch}")
-    print(f"✓ Iterations: {cur_itrs}")
-    print(f"✓ Best Score: {best_score:.4f}")
+    print(f"✓ Training state: Epoch {start_epoch}, Iterations {cur_itrs}, Best Score {best_score:.4f}")
+    print("Checkpoint loaded successfully!\n")
     
-    if current_lrs:
-        if len(current_lrs) == 1:
-            print(f"✓ Learning Rate: {current_lrs[0]:.6f}")
-        else:
-            print(f"✓ Learning Rates: {current_lrs}")
-    else:
-        print("⚠ No learning rate information found in checkpoint")
-    
-    print("Checkpoint loaded successfully for continue training!\n")
-    return epoch, cur_itrs, best_score, current_lrs
+    return start_epoch, cur_itrs, best_score
