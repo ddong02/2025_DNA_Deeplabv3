@@ -18,6 +18,6 @@ results_deeplabv3/
 FLOPs.txt
 datasets/
 wandb/
-test_results_folder
-results_deeplabv3_baseline
-result_deeplab_cw/
+class_weights/
+test_results_folder/
+overlay_output/

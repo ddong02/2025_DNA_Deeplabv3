@@ -212,8 +212,8 @@ def main():
     original_min = class_weights.min().item()
     original_max = class_weights.max().item()
     
-    # Set target max ratio (10x for more balanced training with minority classes)
-    target_max_ratio = 10.0
+    # Set target max ratio (configurable for sweep optimization)
+    target_max_ratio = opts.target_max_ratio
     min_weight_threshold = 0.1
     max_weight_threshold = min_weight_threshold * target_max_ratio  # 1.0
     
