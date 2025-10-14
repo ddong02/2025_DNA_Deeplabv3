@@ -41,9 +41,7 @@ class StreamSegMetrics(_StreamMetrics):
             if k!="Class IoU":
                 string += "%s: %f\n"%(k, v)
         
-        #string+='Class IoU:\n'
-        #for k, v in results['Class IoU'].items():
-        #    string += "\tclass %d: %f\n"%(k, v)
+        # Class IoU section removed - will be shown separately in comparison table
         return string
 
     def _fast_hist(self, label_true, label_pred):

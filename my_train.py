@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 from my_utils.training_args import get_argparser
 from my_utils.dna2025_dataset import DNA2025Dataset
 from my_utils.validation import validate
-from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint_for_continue
+from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint
 from my_utils.early_stopping import EarlyStopping
 from my_utils.calculate_class_weights import calculate_class_weights
 from my_utils.losses import CombinedLoss, FocalLoss
@@ -41,7 +41,8 @@ def get_dataset(opts):
         crop_size=[opts.crop_size, opts.crop_size],
         subset='train',
         scale_range=[0.75, 1.25],
-        random_seed=opts.random_seed
+        random_seed=opts.random_seed,
+        subset_ratio=getattr(opts, 'subset_ratio', 1.0)
     )
     
     val_dst = DNA2025Dataset(
@@ -49,7 +50,8 @@ def get_dataset(opts):
         crop_size=[opts.crop_size, opts.crop_size],
         subset='val',
         scale_range=None,
-        random_seed=opts.random_seed
+        random_seed=opts.random_seed,
+        subset_ratio=getattr(opts, 'subset_ratio', 1.0)
     )
 
     return train_dst, val_dst
@@ -322,26 +324,19 @@ def main():
         print(f"\n✓ Using default checkpoint directory: {checkpoint_dir}/")
     
     utils.mkdir(checkpoint_dir)
-    
-    # Initialize training variables
-    start_epoch = 1
-    cur_itrs = 0
-    best_score = 0.0
-    
+    pretrained_loaded = False
     if opts.ckpt is not None and os.path.isfile(opts.ckpt):
-        # Check if this is a continue training scenario
         if opts.continue_training:
-            print("[!] Continue training from checkpoint")
-            # We'll load the checkpoint after setting up optimizer and scheduler
-            continue_from_checkpoint = True
+            # Continue training - will be handled later
+            pass
         else:
-            print("[!] Loading pretrained model")
+            # Load pretrained model
             model, _ = load_pretrained_model(
                 model, opts.ckpt, 
                 num_classes_old=opts.pretrained_num_classes, 
                 num_classes_new=opts.num_classes
             )
-            continue_from_checkpoint = False
+            pretrained_loaded = True
     else:
         print("[!] Training from scratch")
         continue_from_checkpoint = False
@@ -377,14 +372,58 @@ def main():
         print(f"Resuming from epoch {start_epoch}, iteration {cur_itrs}")
 
     # Training setup
+    best_score = 0.0
+    cur_itrs = 0
+    start_epoch = 1
     training_start_time = time.time()
+    
+    # Continue training from checkpoint if specified
+    if opts.continue_training and opts.ckpt is not None and os.path.isfile(opts.ckpt):
+        print(f"\n=== CONTINUE TRAINING ===")
+        print(f"Resuming from checkpoint: {opts.ckpt}")
+        start_epoch, cur_itrs, best_score = load_checkpoint(
+            opts.ckpt, model, optimizer, scheduler, device
+        )
+        print(f"Training will resume from epoch {start_epoch}")
+        print(f"Current iteration count: {cur_itrs}")
+        print(f"Best score so far: {best_score:.4f}")
+        
+        # Check if training is already complete
+        if start_epoch > opts.epochs:
+            print(f"\n⚠️  WARNING: Training already completed!")
+            print(f"   Current epoch: {start_epoch}")
+            print(f"   Target epochs: {opts.epochs}")
+            print(f"   No additional training needed.")
+            print("="*50 + "\n")
+            return
+        elif start_epoch == opts.epochs:
+            print(f"\n⚠️  WARNING: Training is at the final epoch!")
+            print(f"   Current epoch: {start_epoch}")
+            print(f"   Target epochs: {opts.epochs}")
+            print(f"   Only validation will be performed.")
+            print("="*50 + "\n")
+        else:
+            remaining_epochs = opts.epochs - start_epoch + 1
+            print(f"   Remaining epochs to train: {remaining_epochs}")
+            print("="*50 + "\n")
+    else:
+        # Determine training type
+        if pretrained_loaded:
+            print(f"\n=== STARTING NEW TRAINING ===")
+            print("Training with pretrained weights")
+            print("="*50 + "\n")
+        else:
+            print(f"\n=== STARTING NEW TRAINING ===")
+            print("Training from scratch")
+            print("="*50 + "\n")
     
     # Track metrics for displaying changes
     prev_metrics = {
         'loss': None,
         'Mean IoU': None,
         'Overall Acc': None,
-        'Mean Acc': None
+        'Mean Acc': None,
+        'Class IoU': None
     }
     
     # ===== Early Stopping Setup =====
@@ -409,17 +448,7 @@ def main():
     denorm = utils.Denormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     # ===== TRAINING LOOP =====
-    # For continue training, adjust the epoch range
-    if continue_from_checkpoint:
-        # Continue training: start from loaded epoch + 1, run for specified additional epochs
-        end_epoch = start_epoch + opts.epochs
-        print(f"Continue training: Epochs {start_epoch + 1} to {end_epoch} (additional {opts.epochs} epochs)")
-    else:
-        # Normal training: start from 1, run for specified epochs
-        end_epoch = opts.epochs
-        start_epoch = 1
-    
-    for epoch in range(start_epoch, end_epoch + 1):
+    for epoch in range(start_epoch, opts.epochs + 1):
         epoch_start_time = time.time()
         
         # STAGE 2: Unfreeze backbone
@@ -576,15 +605,36 @@ def main():
         print(f"  Mean Acc:        {current_macc:.4f}{format_change(current_macc, prev_metrics['Mean Acc'])}")
         print(f"{'='*80}")
         
-        # Show detailed class IoU (original output)
+        # Show detailed class IoU with comparison
         print(f"\nDetailed Metrics:")
         print(metrics.to_str(val_score))
+        
+        # Show Class IoU comparison if previous epoch exists
+        if prev_metrics['Class IoU'] is not None:
+            print(f"\nClass IoU Changes from Previous Epoch:")
+            print(f"{'Class':<20} {'Current':<10} {'Previous':<10} {'Change':<10}")
+            print(f"{'-'*50}")
+            
+            current_class_ious = val_score['Class IoU']
+            prev_class_ious = prev_metrics['Class IoU']
+            
+            for class_id in range(len(current_class_ious)):
+                current_iou = current_class_ious[class_id]
+                prev_iou = prev_class_ious[class_id]
+                delta = current_iou - prev_iou
+                
+                arrow = "↑" if delta > 0 else "↓" if delta < 0 else "━"
+                sign = "+" if delta > 0 else ""
+                change_str = f"{arrow} {sign}{delta:.4f}" if abs(delta) >= 0.0001 else "━ ±0.0000"
+                
+                print(f"Class {class_id:<15} {current_iou:<10.4f} {prev_iou:<10.4f} {change_str}")
         
         # Update previous metrics for next epoch
         prev_metrics['loss'] = current_loss
         prev_metrics['Mean IoU'] = current_miou
         prev_metrics['Overall Acc'] = current_oacc
         prev_metrics['Mean Acc'] = current_macc
+        prev_metrics['Class IoU'] = val_score['Class IoU'].copy()
 
         # ===== Early Stopping Check =====
         # Only apply early stopping in Stage 2 (after backbone is unfrozen)
@@ -693,8 +743,6 @@ def main():
             # Log validation images (if available)
             if ret_samples and len(ret_samples) > 0:
                 samples_to_show = ret_samples[:4]
-                visdom_samples_dir = os.path.join('results', 'visdom_samples')
-                os.makedirs(visdom_samples_dir, exist_ok=True)
                 
                 # Prepare all images first
                 wandb_images = {}
@@ -717,14 +765,6 @@ def main():
                     # Convert CHW to HWC for WandB
                     concat_img_hwc = concat_img.transpose(1, 2, 0)
                     wandb_images[f'Validation Sample {k}'] = wandb.Image(concat_img_hwc, caption=f'Sample {k}')
-                    
-                    # Save locally
-                    save_path = os.path.join(visdom_samples_dir, 
-                                           f'validation_sample_{k}_epoch_{epoch:03d}.png')
-                    try:
-                        Image.fromarray(concat_img_hwc).save(save_path)
-                    except Exception as e:
-                        print(f"Warning: Failed to save visdom sample {k}: {e}")
                 
                 # Log all images at once
                 wandb.log(wandb_images, step=epoch)

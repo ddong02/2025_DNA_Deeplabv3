@@ -99,12 +99,9 @@ def get_argparser():
     parser.add_argument("--skip_save_class_weights", action='store_true', default=False,
                         help="Skip saving calculated class weights to file")
     
-    # Loss function options
-    parser.add_argument("--loss_type", type=str, default='ce',
-                        choices=['ce', 'focal'],
-                        help="Loss function type: 'ce' for Cross-Entropy, 'focal' for Focal Loss")
-    parser.add_argument("--focal_gamma", type=float, default=2.0,
-                        help="Gamma parameter for Focal Loss (default: 2.0). "
-                             "Higher values focus more on hard examples. Typical range: [0.5, 5.0]")
+    # Dataset subset 관련 인자
+    parser.add_argument("--subset_ratio", type=float, default=1.0,
+                        help="Ratio of dataset to use for training (0.0-1.0, default: 1.0 for full dataset). "
+                             "Useful for quick testing (e.g., 0.05 for 5% of data)")
 
     return parser

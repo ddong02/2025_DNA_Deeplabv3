@@ -121,7 +121,7 @@ class DNA2025Dataset(Dataset):
         [128, 128, 128],  # 18: Other
     ], dtype=np.uint8)
     
-    def __init__(self, root_dir, crop_size, subset, scale_range=None, random_seed=1):
+    def __init__(self, root_dir, crop_size, subset, scale_range=None, random_seed=1, subset_ratio=1.0):
         """
         Args:
             root_dir: Root directory of the dataset
@@ -129,6 +129,7 @@ class DNA2025Dataset(Dataset):
             subset: 'train', 'val', or 'test'
             scale_range: Range for random scaling (only for training)
             random_seed: Random seed for reproducibility
+            subset_ratio: Ratio of dataset to use (0.0-1.0, default: 1.0 for full dataset)
         """
         self.crop_size = crop_size
         self.root_dir = root_dir
@@ -175,6 +176,19 @@ class DNA2025Dataset(Dataset):
                     print(f"Warning: Label not found for {img_path}")
             
             print(f"  {cam}: {len(cam_images)} images loaded")
+        
+        # Apply subset ratio if specified
+        if subset_ratio < 1.0:
+            original_count = len(self.image_paths)
+            subset_size = int(len(self.image_paths) * subset_ratio)
+            subset_size = max(1, subset_size)  # Ensure at least 1 sample
+            
+            # Randomly sample subset
+            indices = np.random.choice(len(self.image_paths), subset_size, replace=False)
+            self.image_paths = [self.image_paths[i] for i in indices]
+            self.label_paths = [self.label_paths[i] for i in indices]
+            
+            print(f"Applied subset ratio {subset_ratio:.1%}: {original_count} → {len(self.image_paths)} images")
         
         # Validation
         assert len(self.image_paths) == len(self.label_paths), \
