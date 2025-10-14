@@ -835,25 +835,51 @@ if __name__ == "__main__":
 #     --early_stop_metric "Mean IoU" \
 #     --save_val_results
 
+# PC A에서 실행
 # python my_train.py \
 #     --ckpt checkpoints/ce_only2/best_model.pth \
-#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --data_root ./datasets/data \
-#     --experiment_name "focal_loss_gamma1_5" \
-#     --epochs 100 \
+#     --experiment_name "focal_loss_gamma1_0" \
+#     --epochs 50 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
 #     --lr 0.00001 \
 #     --crop_size 1024 \
 #     --loss_type focal \
-#     --focal_gamma 1.5 \
+#     --focal_gamma 1.0 \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "focal-loss-gamma1.5 for performance comparison" \
-#     --wandb_notes "Focal Loss (gamma=1.5)" \
-#     --wandb_tags "focal_loss,gamma1.5,fine_tuning,from_ce,conservative_lr,test_50epochs" \
+#     --wandb_name "focal-loss-gamma1.0-extreme-PCA" \
+#     --wandb_notes "Extreme experiment: Gamma=1.0 (weak focusing) on PC A" \
+#     --wandb_tags "focal_loss,gamma1.0,extreme,weak_focusing" \
 #     --early_stop \
-#     --early_stop_patience 15 \
+#     --early_stop_patience 10 \
 #     --early_stop_min_delta 0.001 \
 #     --early_stop_metric "Mean IoU" \
-#     --save_val_results
+#     --save_val_results \
+#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth
+
+# PC B에서 실행
+# python my_train.py \
+#     --ckpt checkpoints/ce_only2/best_model.pth \
+#     --data_root ./datasets/data \
+#     --experiment_name "focal_loss_gamma3_0" \
+#     --epochs 50 \
+#     --batch_size 4 \
+#     --val_batch_size 4 \
+#     --lr 0.00001 \
+#     --crop_size 1024 \
+#     --loss_type focal \
+#     --focal_gamma 3.0 \
+#     --enable_vis \
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_name "focal-loss-gamma3.0-extreme-PC Main" \
+#     --wandb_notes "Extreme experiment: Gamma=3.0 (strong focusing) on PC Main" \
+#     --wandb_tags "focal_loss,gamma3.0,extreme,strong_focusing" \
+#     --early_stop \
+#     --early_stop_patience 10 \
+#     --early_stop_min_delta 0.001 \
+#     --early_stop_metric "Mean IoU" \
+#     --save_val_results \
+#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth
+    
