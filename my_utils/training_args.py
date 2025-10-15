@@ -106,5 +106,12 @@ def get_argparser():
     parser.add_argument("--target_max_ratio", type=float, default=10.0,
                         help="Maximum ratio for class weights clipping (default: 10.0). "
                              "Used for WandB sweep optimization.")
+    
+    # Focal Loss 관련 인자
+    parser.add_argument("--focal_gamma", type=float, default=2.0,
+                        help="Focal Loss gamma parameter (focusing parameter). "
+                             "Higher values focus more on hard examples. Default: 2.0")
+    parser.add_argument("--use_focal_loss", action='store_true', default=True,
+                        help="Use Focal Loss instead of Cross-Entropy Loss")
 
     return parser

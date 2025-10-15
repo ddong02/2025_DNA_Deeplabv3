@@ -31,7 +31,7 @@ from my_utils.validation import validate
 from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint
 from my_utils.early_stopping import EarlyStopping
 from my_utils.calculate_class_weights import calculate_class_weights
-from my_utils.losses import CombinedLoss
+from my_utils.losses import CombinedLoss, FocalLoss
 
 
 def get_dataset(opts):
@@ -289,18 +289,19 @@ def main():
     print(f"Classes unchanged: {sum(1 for w in class_weights if w.item() not in [min_weight_threshold, max_weight_threshold])}")
     print("="*80)
     
-    # Loss function: Weighted Cross-Entropy Loss
-    criterion = nn.CrossEntropyLoss(
-        weight=class_weights,
-        ignore_index=255,
-        reduction='mean'
+    # Loss function: Focal Loss with Class Weights
+    criterion = FocalLoss(
+        alpha=class_weights,
+        gamma=opts.focal_gamma,
+        ignore_index=255
     )
     
     print("\n✓ Loss Function Configuration:")
-    print(f"  Type: Weighted Cross-Entropy Loss")
+    print(f"  Type: Focal Loss")
     print(f"  Class Weights: Applied (sqrt_inv_freq method)")
     print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
-    print(f"  This configuration balances class importance while maintaining stability")
+    print(f"  Gamma (Focusing Parameter): {opts.focal_gamma}")
+    print(f"  This configuration focuses on hard examples while balancing class importance")
 
     print("="*80 + "\n")
 
@@ -348,12 +349,14 @@ def main():
     
     trainable_params_stage1 = filter(lambda p: p.requires_grad, model.parameters())
     
-    # Using full learning rate with Weighted CE Loss
-    print(f"Stage 1 Learning Rate: {opts.lr:.2e}")
+    # Using reduced learning rate for Focal Loss continuation
+    # Focal Loss continuation requires lower learning rate for stability
+    focal_lr = opts.lr / 10  # Reduce learning rate for continuation
+    print(f"Stage 1 Learning Rate: {focal_lr:.2e} (reduced for Focal Loss continuation)")
     
     optimizer = torch.optim.SGD(
         params=trainable_params_stage1, 
-        lr=opts.lr,
+        lr=focal_lr,
         momentum=0.9, 
         weight_decay=opts.weight_decay
     )
@@ -460,9 +463,9 @@ def main():
                 param.requires_grad = True
             
             print("Re-creating optimizer with differential learning rates...")
-            # Differential learning rates for fine-tuning converged model
-            backbone_lr = opts.lr / 20      # 1/20 of base LR for stable backbone fine-tuning
-            classifier_lr = opts.lr / 5     # 1/5 of base LR for classifier
+            # Differential learning rates for fine-tuning converged model with Focal Loss
+            backbone_lr = focal_lr / 20      # 1/20 of focal LR for stable backbone fine-tuning
+            classifier_lr = focal_lr / 5     # 1/5 of focal LR for classifier
             
             optimizer = torch.optim.SGD([
                 {'params': model.module.backbone.parameters(), 'lr': backbone_lr},
@@ -727,6 +730,7 @@ def main():
                     '[Val] Mean Acc': val_score['Mean Acc'],
                     '[Val] Mean IoU': val_score['Mean IoU'],
                     'Gradient Norm': total_norm,
+                    'Focal Gamma': opts.focal_gamma,
                 }, step=epoch)
                 print(f"✅ WandB log successful for epoch {epoch}")
             except Exception as e:
@@ -885,25 +889,30 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Example usage with Weighted Cross-Entropy Loss:
-# python my_train.py \
-#     --ckpt checkpoints/ce_only2/best_model.pth \
+# Example usage with Focal Loss (continuation from best weighted CE model):
+# python train_focal_loss.py \
+#     --ckpt checkpoints/weighted_ce_sweep_optim/best_model.pth \
 #     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --data_root ./datasets/data \
-#     --experiment_name "weighted_ce_sweep_optim" \
-#     --epochs 200 \
+#     --experiment_name "focal_loss_continuation" \
+#     --epochs 100 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
 #     --lr 1e-5 \
+#     --focal_gamma 2.0 \
 #     --target_max_ratio 6 \
 #     --crop_size 1024 \
 #     --enable_vis \
-#     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "weighted-ce-sweep" \
-#     --wandb_notes "Weighted CE - optimized run with best hyperparameters" \
-#     --wandb_tags "weighted_ce,sweep,fine_tuning" \
+#     --wandb_project "deeplabv3-focal-loss" \
+#     --wandb_name "focal-loss-continuation" \
+#     --wandb_notes "Focal Loss continuation from best weighted CE model" \
+#     --wandb_tags "focal_loss,continuation,optimization" \
 #     --early_stop \
-#     --early_stop_patience 10 \
-#     --early_stop_min_delta 0.001 \
+#     --early_stop_patience 8 \
+#     --early_stop_min_delta 0.0005 \
 #     --early_stop_metric "Mean IoU" \
-#     --subset_ratio 1.0
+#     --subset_ratio 1.0 \
+#     --use_focal_loss
+
+# Sweep 실행:
+# wandb sweep sweep_config_focal_loss.yaml
