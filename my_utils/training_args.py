@@ -107,6 +107,11 @@ def get_argparser():
                         help="Maximum ratio for class weights clipping (default: 10.0). "
                              "Used for WandB sweep optimization.")
     
+    # Learning rate scheduler 관련 인자
+    parser.add_argument("--scheduler_type", type=str, default='cosine', 
+                       choices=['cosine', 'plateau'], 
+                       help="Learning rate scheduler type for Stage 2 (default: cosine)")
+    
     # Focal Loss 관련 인자
     parser.add_argument("--focal_gamma", type=float, default=2.0,
                         help="Focal Loss gamma parameter (focusing parameter). "

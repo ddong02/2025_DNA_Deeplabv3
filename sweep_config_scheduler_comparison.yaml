@@ -1,0 +1,63 @@
+program: my_train_lr_cosine.py
+method: grid
+metric:
+  goal: maximize
+  name: "[Val] Mean IoU"
+project: "deeplabv3-segmentation"
+
+parameters:
+  # Scheduler comparison - Grid search for exact comparison
+  scheduler_type:
+    values: ['cosine', 'plateau']
+  
+  # Fixed hyperparameters for fair comparison
+  lr:
+    value: 8e-6
+  target_max_ratio:
+    value: 6.5
+  focal_gamma:
+    value: 2.0
+  
+  # Training settings
+  epochs:
+    value: 120
+  unfreeze_epoch:
+    value: 15
+  batch_size:
+    value: 4
+  val_batch_size:
+    value: 4
+  crop_size:
+    value: 1024
+  
+  # Dataset and model settings
+  data_root:
+    value: "./datasets/data"
+  ckpt:
+    value: "checkpoints/weighted_ce_sweep_optim/sweep_CE_best_model.pth"
+  class_weights_file:
+    value: "class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth"
+  
+  # Experiment settings
+  experiment_name:
+    value: "scheduler_comparison"
+  
+  # WandB settings
+  wandb_project:
+    value: "deeplabv3-segmentation"
+  wandb_notes:
+    value: "Scheduler comparison: CosineAnnealingLR vs ReduceLROnPlateau"
+  wandb_tags:
+    value: "scheduler_comparison,cosine,plateau,focal_loss"
+  
+  # Training flags
+  early_stop_patience:
+    value: 10
+  early_stop_min_delta:
+    value: 0.001
+  early_stop_metric:
+    value: "Mean IoU"
+  
+  # Use full dataset
+  subset_ratio:
+    value: 1.0
