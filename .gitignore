@@ -15,7 +15,6 @@ val_transformed_samples/
 train_transformed_samples/
 test_visualizations/
 results_deeplabv3/
-FLOPs.txt
 datasets/
 wandb/
 test_results_folder/
