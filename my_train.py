@@ -31,7 +31,7 @@ from my_utils.validation import validate
 from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint
 from my_utils.early_stopping import EarlyStopping
 from my_utils.calculate_class_weights import calculate_class_weights
-from my_utils.losses import CombinedLoss, FocalLoss
+from my_utils.losses import CombinedLoss
 
 
 def get_dataset(opts):
@@ -68,9 +68,20 @@ def format_time(seconds):
 def main():
     opts = get_argparser().parse_args()
 
+    # ===== DEBUG: WandB Status Check =====
+    print("\n" + "="*60)
+    print("🔍 WANDB STATUS")
+    print("="*60)
+    print(f"enable_vis: {opts.enable_vis}")
+    print(f"wandb_project: {opts.wandb_project}")
+    print(f"wandb_name: {opts.wandb_name}")
+    print(f"wandb_tags: {opts.wandb_tags}")
+    print("="*60)
+    
     # Setup visualization with WandB
     vis = None
     if opts.enable_vis:
+        print("✅ WandB ENABLED - Initializing...")
         # Parse tags if provided
         tags = None
         if opts.wandb_tags:
@@ -79,7 +90,8 @@ def main():
         # Generate run name if not provided
         run_name = opts.wandb_name
         if run_name is None:
-            run_name = f"{opts.model}_{opts.dataset}_os{opts.output_stride}_baseline"
+            # Create dynamic run name with hyperparameters
+            run_name = f"sweep_lr{opts.lr:.2e}_weight{opts.target_max_ratio:.1f}"
         
         vis = Visualizer(
             project=opts.wandb_project,
@@ -88,8 +100,11 @@ def main():
             notes=opts.wandb_notes,
             tags=tags
         )
+        print(f"✅ WandB initialized - Project: {opts.wandb_project}, Run: {run_name}")
     else:
-        print("WandB visualization disabled. Use --enable_vis to enable.")
+        print("❌ WandB DISABLED - No logging will occur")
+        print("   Use --enable_vis to enable WandB logging")
+    print("="*60 + "\n")
 
     # Use GPU 0 by default
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -274,34 +289,18 @@ def main():
     print(f"Classes unchanged: {sum(1 for w in class_weights if w.item() not in [min_weight_threshold, max_weight_threshold])}")
     print("="*80)
     
-    # Loss function selection based on opts.loss_type
-    if opts.loss_type == 'focal':
-        criterion = FocalLoss(
-            alpha=class_weights,
-            gamma=opts.focal_gamma,
-            ignore_index=255
-        )
-        
-        print("\n✓ Loss Function Configuration:")
-        print(f"  Type: Focal Loss")
-        print(f"  Gamma (focusing parameter): {opts.focal_gamma}")
-        print(f"  Class Weights: Applied (sqrt_inv_freq method)")
-        print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
-        print(f"  How it works: Focuses on hard examples by down-weighting easy examples")
-        print(f"  Expected benefit: Better performance on minority classes and hard boundaries")
-    else:
-        # Default: Weighted Cross-Entropy Loss
-        criterion = nn.CrossEntropyLoss(
-            weight=class_weights,
-            ignore_index=255,
-            reduction='mean'
-        )
-        
-        print("\n✓ Loss Function Configuration:")
-        print(f"  Type: Weighted Cross-Entropy Loss")
-        print(f"  Class Weights: Applied (sqrt_inv_freq method)")
-        print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
-        print(f"  This configuration balances class importance while maintaining stability")
+    # Loss function: Weighted Cross-Entropy Loss
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights,
+        ignore_index=255,
+        reduction='mean'
+    )
+    
+    print("\n✓ Loss Function Configuration:")
+    print(f"  Type: Weighted Cross-Entropy Loss")
+    print(f"  Class Weights: Applied (sqrt_inv_freq method)")
+    print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
+    print(f"  This configuration balances class importance while maintaining stability")
 
     print("="*80 + "\n")
 
@@ -314,14 +313,17 @@ def main():
         network.convert_to_separable_conv(model.classifier)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
 
-    # Setup checkpoint directory based on experiment_name
+    # Setup checkpoint directory with dynamic name based on hyperparameters
     if opts.experiment_name:
         checkpoint_dir = os.path.join('checkpoints', opts.experiment_name)
         print(f"\n✓ Experiment Name: '{opts.experiment_name}'")
         print(f"  Checkpoints will be saved to: {checkpoint_dir}/")
     else:
-        checkpoint_dir = 'checkpoints'
-        print(f"\n✓ Using default checkpoint directory: {checkpoint_dir}/")
+        # Create dynamic experiment name with hyperparameters
+        experiment_name = f"sweep_lr{opts.lr:.2e}_weight{opts.target_max_ratio:.1f}"
+        checkpoint_dir = os.path.join('checkpoints', experiment_name)
+        print(f"\n✓ Dynamic Experiment Name: '{experiment_name}'")
+        print(f"  Checkpoints will be saved to: {checkpoint_dir}/")
     
     utils.mkdir(checkpoint_dir)
     pretrained_loaded = False
@@ -364,18 +366,13 @@ def main():
     model = nn.DataParallel(model)
     model.to(device)
 
-    # Load checkpoint for continue training if needed
-    if continue_from_checkpoint:
-        start_epoch, cur_itrs, best_score, _ = load_checkpoint_for_continue(
-            opts.ckpt, model, optimizer, scheduler
-        )
-        print(f"Resuming from epoch {start_epoch}, iteration {cur_itrs}")
-
     # Training setup
     best_score = 0.0
     cur_itrs = 0
     start_epoch = 1
     training_start_time = time.time()
+    end_epoch = opts.epochs  # Define end_epoch variable
+    continue_from_checkpoint = False  # Initialize continue_from_checkpoint
     
     # Continue training from checkpoint if specified
     if opts.continue_training and opts.ckpt is not None and os.path.isfile(opts.ckpt):
@@ -387,6 +384,9 @@ def main():
         print(f"Training will resume from epoch {start_epoch}")
         print(f"Current iteration count: {cur_itrs}")
         print(f"Best score so far: {best_score:.4f}")
+        
+        # Set continue_from_checkpoint flag
+        continue_from_checkpoint = True
         
         # Check if training is already complete
         if start_epoch > opts.epochs:
@@ -407,6 +407,9 @@ def main():
             print(f"   Remaining epochs to train: {remaining_epochs}")
             print("="*50 + "\n")
     else:
+        # Set continue_from_checkpoint flag to False for new training
+        continue_from_checkpoint = False
+        
         # Determine training type
         if pretrained_loaded:
             print(f"\n=== STARTING NEW TRAINING ===")
@@ -562,7 +565,7 @@ def main():
         print(f"Validation for Epoch {epoch}...")
         model.eval()
 
-        save_images_this_epoch = opts.save_val_results and (epoch % 10 == 0)
+        save_images_this_epoch = False  # 이미지는 WandB에서만 확인
         
         val_score, ret_samples, confusion_mat = validate(
             opts=opts, 
@@ -685,15 +688,19 @@ def main():
             total_norm = total_norm ** 0.5
             
             # Log all metrics in one batch to avoid step conflicts
-            wandb.log({
-                'epoch': epoch,
-                'Training Loss': avg_epoch_loss,
-                'Learning Rate': current_lr,
-                '[Val] Overall Acc': val_score['Overall Acc'],
-                '[Val] Mean Acc': val_score['Mean Acc'],
-                '[Val] Mean IoU': val_score['Mean IoU'],
-                'Gradient Norm': total_norm,
-            }, step=epoch)
+            try:
+                wandb.log({
+                    'epoch': epoch,
+                    'Training Loss': avg_epoch_loss,
+                    'Learning Rate': current_lr,
+                    '[Val] Overall Acc': val_score['Overall Acc'],
+                    '[Val] Mean Acc': val_score['Mean Acc'],
+                    '[Val] Mean IoU': val_score['Mean IoU'],
+                    'Gradient Norm': total_norm,
+                }, step=epoch)
+                print(f"✅ WandB log successful for epoch {epoch}")
+            except Exception as e:
+                print(f"❌ WandB log failed: {e}")
             
             # Log class IoU table with same step
             vis.vis_table("[Val] Class IoU", val_score['Class IoU'], step=epoch)
@@ -768,6 +775,8 @@ def main():
                 
                 # Log all images at once
                 wandb.log(wandb_images, step=epoch)
+        else:
+            print(f"⚠️ WandB disabled - No logging for epoch {epoch}")
 
         # Save checkpoints
         current_score = val_score['Mean IoU']
@@ -782,14 +791,7 @@ def main():
             )
             print(f"✓ New best model saved! (Mean IoU: {best_score:.4f}) → {best_model_path}")
             
-            if opts.save_val_results and not save_images_this_epoch:
-                print("Best score achieved! Saving 3 comparison images...")
-                _, _, _ = validate(
-                    opts=opts, model=model, loader=val_loader, 
-                    device=device, metrics=metrics, ret_samples_ids=None,
-                    epoch=f"best_epoch_{epoch}", save_sample_images=True,
-                    denorm=denorm
-                )
+            # Best score achieved - 이미지는 WandB에서 확인 가능
         
         # 2. Save checkpoint for every epoch (with epoch number)
         epoch_checkpoint_path = os.path.join(
@@ -852,74 +854,25 @@ def main():
 if __name__ == "__main__":
     main()
 
+# Example usage with Weighted Cross-Entropy Loss:
 # python my_train.py \
 #     --ckpt checkpoints/ce_only2/best_model.pth \
 #     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --data_root ./datasets/data \
-#     --experiment_name "focal_loss_gamma2_conservative" \
+#     --experiment_name "weighted_ce_sweep" \
 #     --epochs 50 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
 #     --lr 0.00001 \
 #     --crop_size 1024 \
-#     --loss_type focal \
-#     --focal_gamma 2.0 \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "focal-loss-gamma2-conservative" \
-#     --wandb_notes "Focal Loss (gamma=2.0) with conservative LR=0.00001, 50 epochs test" \
-#     --wandb_tags "focal_loss,gamma2,fine_tuning,from_ce,conservative_lr,test_50epochs" \
+#     --wandb_name "weighted-ce-sweep" \
+#     --wandb_notes "Weighted CE Loss with sweep optimization" \
+#     --wandb_tags "weighted_ce,sweep,fine_tuning" \
 #     --early_stop \
 #     --early_stop_patience 10 \
 #     --early_stop_min_delta 0.001 \
 #     --early_stop_metric "Mean IoU" \
-#     --save_val_results
-
-# PC A에서 실행
-# python my_train.py \
-#     --ckpt checkpoints/ce_only2/best_model.pth \
-#     --data_root ./datasets/data \
-#     --experiment_name "focal_loss_gamma1_0" \
-#     --epochs 50 \
-#     --batch_size 4 \
-#     --val_batch_size 4 \
-#     --lr 0.00001 \
-#     --crop_size 1024 \
-#     --loss_type focal \
-#     --focal_gamma 1.0 \
-#     --enable_vis \
-#     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "focal-loss-gamma1.0-extreme-PCA" \
-#     --wandb_notes "Extreme experiment: Gamma=1.0 (weak focusing) on PC A" \
-#     --wandb_tags "focal_loss,gamma1.0,extreme,weak_focusing" \
-#     --early_stop \
-#     --early_stop_patience 10 \
-#     --early_stop_min_delta 0.001 \
-#     --early_stop_metric "Mean IoU" \
-#     --save_val_results \
-#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth
-
-# PC B에서 실행
-# python my_train.py \
-#     --ckpt checkpoints/ce_only2/best_model.pth \
-#     --data_root ./datasets/data \
-#     --experiment_name "focal_loss_gamma3_0" \
-#     --epochs 50 \
-#     --batch_size 4 \
-#     --val_batch_size 4 \
-#     --lr 0.00001 \
-#     --crop_size 1024 \
-#     --loss_type focal \
-#     --focal_gamma 3.0 \
-#     --enable_vis \
-#     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "focal-loss-gamma3.0-extreme-PC Main" \
-#     --wandb_notes "Extreme experiment: Gamma=3.0 (strong focusing) on PC Main" \
-#     --wandb_tags "focal_loss,gamma3.0,extreme,strong_focusing" \
-#     --early_stop \
-#     --early_stop_patience 10 \
-#     --early_stop_min_delta 0.001 \
-#     --early_stop_metric "Mean IoU" \
-#     --save_val_results \
-#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth
+# 이미지는 WandB에서 확인 가능
     

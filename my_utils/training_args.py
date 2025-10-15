@@ -35,8 +35,6 @@ def get_argparser():
     parser.add_argument("--output_stride", type=int, default=16, choices=[8, 16])
 
     # Train Options
-    parser.add_argument("--save_val_results", action='store_true', default=False,
-                        help="save segmentation results to \"./results\"")
     parser.add_argument("--epochs", type=int, default=200,
                         help="number of epochs to train (default: 200)")
     parser.add_argument("--unfreeze_epoch", type=int, default=16,
@@ -68,7 +66,7 @@ def get_argparser():
                         help="print interval of loss (default: 10)")
 
     # WandB (Weights & Biases) options
-    parser.add_argument("--enable_vis", action='store_true', default=False,
+    parser.add_argument("--enable_vis", action='store_true', default=True,
                         help="use WandB for visualization and logging")
     parser.add_argument("--wandb_project", type=str, default='deeplabv3-segmentation',
                         help='WandB project name')
@@ -82,7 +80,7 @@ def get_argparser():
                         help='number of samples for visualization (default: 4)')
     
     # Early Stopping 관련 인자 추가
-    parser.add_argument("--early_stop", action='store_true', default=False,
+    parser.add_argument("--early_stop", action='store_true', default=True,
                         help="Enable early stopping")
     parser.add_argument("--early_stop_patience", type=int, default=10,
                         help="Early stopping patience (epochs without improvement)")

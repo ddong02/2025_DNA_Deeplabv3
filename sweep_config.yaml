@@ -26,7 +26,7 @@ parameters:
   
   # Training parameters
   epochs:
-    value: 50  # Reduced for faster sweep
+    value: 30  # Reduced for faster sweep
   unfreeze_epoch:
     value: 16
   batch_size:
@@ -35,17 +35,19 @@ parameters:
     value: 4
   crop_size:
     value: 1024
-  experiment_name:
-    value: "weighted_ce_sweep"
+  # experiment_name: removed to allow dynamic generation
   # Checkpoint (required)
   ckpt:
     value: "./checkpoints/ce_only2/best_model.pth"
   
-  # WandB settings (removed enable_vis flag to avoid boolean issues)
+  # WandB settings
+  wandb_project:
+    value: "deeplabv3-segmentation"
+  # wandb_name: removed to allow dynamic generation
   wandb_tags:
     value: "sweep,lr_optimization,class_weights"
   
-  # Early stopping for efficiency (removed early_stop flag to avoid boolean issues)
+  # Early stopping parameters
   early_stop_patience:
     value: 8
   early_stop_min_delta:
@@ -54,8 +56,6 @@ parameters:
     value: "Mean IoU"
   
   # Fixed training parameters
-  lr_policy:
-    value: "poly"
   weight_decay:
     value: 0.0001
   random_seed:
@@ -66,12 +66,16 @@ parameters:
   # Class weights parameters
   class_weights_file:
     value: "class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth"
+  
+  # Dataset subset for faster testing
+  subset_ratio:
+    value: 1.0
 
   # Parameters to optimize
   lr:
     distribution: log_uniform_values
-    min: 0.0000001
-    max: 0.00001
+    min: 0.000001    # 1e-6 (더 넓은 범위)
+    max: 0.0001     # 1e-4 (100배 범위)
   
   target_max_ratio:
     distribution: uniform
