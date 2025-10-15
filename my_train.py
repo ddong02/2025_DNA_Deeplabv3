@@ -313,17 +313,15 @@ def main():
         network.convert_to_separable_conv(model.classifier)
     utils.set_bn_momentum(model.backbone, momentum=0.01)
 
-    # Setup checkpoint directory with dynamic name based on hyperparameters
-    if opts.experiment_name:
-        checkpoint_dir = os.path.join('checkpoints', opts.experiment_name)
-        print(f"\n✓ Experiment Name: '{opts.experiment_name}'")
-        print(f"  Checkpoints will be saved to: {checkpoint_dir}/")
-    else:
-        # Create dynamic experiment name with hyperparameters
-        experiment_name = f"sweep_lr{opts.lr:.2e}_weight{opts.target_max_ratio:.1f}"
-        checkpoint_dir = os.path.join('checkpoints', experiment_name)
-        print(f"\n✓ Dynamic Experiment Name: '{experiment_name}'")
-        print(f"  Checkpoints will be saved to: {checkpoint_dir}/")
+    # Setup checkpoint directory with fixed experiment name
+    experiment_name = opts.experiment_name or 'sweep_experiments'
+    checkpoint_dir = os.path.join('checkpoints', experiment_name)
+    print(f"\n✓ Experiment Name: '{experiment_name}'")
+    print(f"  Checkpoints will be saved to: {checkpoint_dir}/")
+    
+    # Create run-specific suffix for filenames
+    run_suffix = f"sweep_lr{opts.lr:.2e}_weight{opts.target_max_ratio:.1f}"
+    print(f"  Run suffix: '{run_suffix}'")
     
     utils.mkdir(checkpoint_dir)
     pretrained_loaded = False
@@ -660,8 +658,40 @@ def main():
                     print(f"  (Set at Stage 2 start: epoch {opts.unfreeze_epoch})")
                     print(f"{'='*80}\n")
                     
+                    # Ensure final WandB logging before stopping
+                    if vis is not None:
+                        current_lr = optimizer.param_groups[0]['lr']
+                        
+                        # Calculate gradient norm for monitoring
+                        total_norm = 0
+                        for p in model.parameters():
+                            if p.grad is not None:
+                                param_norm = p.grad.data.norm(2)
+                                total_norm += param_norm.item() ** 2
+                        total_norm = total_norm ** 0.5
+                        
+                        # Log final metrics with early stopping flag
+                        try:
+                            wandb.log({
+                                'epoch': epoch,
+                                'Training Loss': avg_epoch_loss,
+                                'Learning Rate': current_lr,
+                                '[Val] Overall Acc': val_score['Overall Acc'],
+                                '[Val] Mean Acc': val_score['Mean Acc'],
+                                '[Val] Mean IoU': val_score['Mean IoU'],
+                                'Gradient Norm': total_norm,
+                                'Early Stopped': True,
+                                'Early Stop Reason': f'No improvement for {early_stopping.patience} epochs'
+                            }, step=epoch)
+                            print(f"✅ Final WandB log successful for early stopped epoch {epoch}")
+                        except Exception as e:
+                            print(f"❌ Final WandB log failed: {e}")
+                        
+                        # Log class IoU table
+                        vis.vis_table("[Val] Class IoU", val_score['Class IoU'], step=epoch)
+                    
                     # Save final checkpoint before stopping
-                    early_stop_path = os.path.join(checkpoint_dir, f'early_stopped_epoch_{epoch:03d}.pth')
+                    early_stop_path = os.path.join(checkpoint_dir, f'{run_suffix}_early_stopped_epoch_{epoch:03d}.pth')
                     save_checkpoint(
                         early_stop_path,
                         epoch, cur_itrs, model, optimizer, scheduler, best_score
@@ -781,10 +811,10 @@ def main():
         # Save checkpoints
         current_score = val_score['Mean IoU']
         
-        # 1. Save best model separately (fixed filename)
+        # 1. Save best model separately (with run suffix)
         if current_score > best_score:
             best_score = current_score
-            best_model_path = os.path.join(checkpoint_dir, 'best_model.pth')
+            best_model_path = os.path.join(checkpoint_dir, f'{run_suffix}_best_model.pth')
             save_checkpoint(
                 best_model_path,
                 epoch, cur_itrs, model, optimizer, scheduler, best_score
@@ -793,10 +823,10 @@ def main():
             
             # Best score achieved - 이미지는 WandB에서 확인 가능
         
-        # 2. Save checkpoint for every epoch (with epoch number)
+        # 2. Save checkpoint for every epoch (with run suffix and epoch number)
         epoch_checkpoint_path = os.path.join(
             checkpoint_dir, 
-            f'epoch_{epoch:03d}_miou_{current_score:.4f}.pth'
+            f'{run_suffix}_epoch_{epoch:03d}_miou_{current_score:.4f}.pth'
         )
         save_checkpoint(
             epoch_checkpoint_path,
@@ -804,8 +834,8 @@ def main():
         )
         print(f"✓ Epoch {epoch} checkpoint saved → {os.path.basename(epoch_checkpoint_path)}")
         
-        # 3. Save latest model (overwritten each epoch)
-        latest_path = os.path.join(checkpoint_dir, 'latest_model.pth')
+        # 3. Save latest model (with run suffix, overwritten each epoch)
+        latest_path = os.path.join(checkpoint_dir, f'{run_suffix}_latest_model.pth')
         save_checkpoint(
             latest_path,
             epoch, cur_itrs, model, optimizer, scheduler, best_score
@@ -847,6 +877,19 @@ def main():
     # Finish WandB run
     if vis is not None:
         print("\nFinalizing WandB logging...")
+        
+        # Log final summary metrics
+        try:
+            wandb.log({
+                'Final Best Score': best_score,
+                'Total Epochs': epoch,
+                'Training Completed': True,
+                'Early Stopped': early_stopping is not None and early_stopping.early_stop if early_stopping else False
+            })
+            print("✅ Final summary logged to WandB")
+        except Exception as e:
+            print(f"❌ Final summary logging failed: {e}")
+        
         vis.finish()
         print("✓ WandB run completed")
 
@@ -859,20 +902,20 @@ if __name__ == "__main__":
 #     --ckpt checkpoints/ce_only2/best_model.pth \
 #     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --data_root ./datasets/data \
-#     --experiment_name "weighted_ce_sweep" \
-#     --epochs 50 \
+#     --experiment_name "weighted_ce_sweep_optim" \
+#     --epochs 200 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
-#     --lr 0.00001 \
+#     --lr 1e-5 \
+#     --target_max_ratio 6 \
 #     --crop_size 1024 \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
 #     --wandb_name "weighted-ce-sweep" \
-#     --wandb_notes "Weighted CE Loss with sweep optimization" \
+#     --wandb_notes "Weighted CE - optimized run with best hyperparameters" \
 #     --wandb_tags "weighted_ce,sweep,fine_tuning" \
 #     --early_stop \
 #     --early_stop_patience 10 \
 #     --early_stop_min_delta 0.001 \
 #     --early_stop_metric "Mean IoU" \
-# 이미지는 WandB에서 확인 가능
-    
+#     --subset_ratio 1.0

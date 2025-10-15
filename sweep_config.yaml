@@ -35,7 +35,9 @@ parameters:
     value: 4
   crop_size:
     value: 1024
-  # experiment_name: removed to allow dynamic generation
+  # Fixed experiment name for all sweep runs
+  experiment_name:
+    value: "sweep_experiments"
   # Checkpoint (required)
   ckpt:
     value: "./checkpoints/ce_only2/best_model.pth"
