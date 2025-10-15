@@ -18,6 +18,7 @@ results_deeplabv3/
 FLOPs.txt
 datasets/
 wandb/
-class_weights/
 test_results_folder/
 overlay_output/
+class_weights/class_weight_new.pth
+class_weights/class_weight_old_data.pth
