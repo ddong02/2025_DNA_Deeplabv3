@@ -1,7 +1,7 @@
 # Sweep basic augmentation with optimized hyperparameters trained CE_best_model
 
 program: my_train_basic_augment.py
-method: grid
+method: random
 metric:
   goal: maximize
   name: "[Val] Mean IoU"
@@ -9,17 +9,17 @@ project: "deeplabv3-segmentation"
 name: "basic_augmentation_sweep with Sweep_CE_best_model"
 
 parameters:
-  # Learning rate sweep around 1e-5 baseline
+  # Learning rate sweep around 1e-5 baseline (3개로 축소)
   lr:
-    values: [5e-6, 1e-5, 1.5e-5, 2e-5, 3e-5]
+    values: [1e-5, 1.5e-5, 2e-5]
   
-  # Weight decay for regularization
+  # Weight decay for regularization (3개 유지)
   weight_decay:
     values: [1e-5, 1e-4, 1e-3]
   
-  # Class weights ratio variations
+  # Class weights ratio (기본값으로 고정)
   target_max_ratio:
-    values: [5.5, 6.5, 7.5]
+    value: 6.5
   
   # Training settings
   epochs:
