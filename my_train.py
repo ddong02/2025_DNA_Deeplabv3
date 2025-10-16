@@ -31,7 +31,7 @@ from my_utils.validation import validate
 from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint
 from my_utils.early_stopping import EarlyStopping
 from my_utils.calculate_class_weights import calculate_class_weights
-from my_utils.losses import CombinedLoss
+from my_utils.losses import CombinedLoss, FocalLoss
 
 
 def get_dataset(opts):
@@ -289,18 +289,19 @@ def main():
     print(f"Classes unchanged: {sum(1 for w in class_weights if w.item() not in [min_weight_threshold, max_weight_threshold])}")
     print("="*80)
     
-    # Loss function: Weighted Cross-Entropy Loss
-    criterion = nn.CrossEntropyLoss(
-        weight=class_weights,
-        ignore_index=255,
-        reduction='mean'
+    # Loss function: Focal Loss with class weights
+    criterion = FocalLoss(
+        alpha=class_weights,
+        gamma=opts.focal_gamma,
+        ignore_index=255
     )
     
     print("\n✓ Loss Function Configuration:")
-    print(f"  Type: Weighted Cross-Entropy Loss")
+    print(f"  Type: Focal Loss")
+    print(f"  Gamma: {opts.focal_gamma}")
     print(f"  Class Weights: Applied (sqrt_inv_freq method)")
     print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
-    print(f"  This configuration balances class importance while maintaining stability")
+    print(f"  This configuration focuses on hard examples while balancing class importance")
 
     print("="*80 + "\n")
 
@@ -358,8 +359,14 @@ def main():
         weight_decay=opts.weight_decay
     )
 
-    # Use PolyLR scheduler
-    scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
+    # Setup scheduler based on scheduler_type
+    if opts.scheduler_type == 'reduce':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-8
+        )
+    else:
+        # Use PolyLR scheduler for other types
+        scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
 
     model = nn.DataParallel(model)
     model.to(device)
@@ -472,9 +479,15 @@ def main():
             print(f"Backbone LR: {backbone_lr:.2e}")
             print(f"Classifier LR: {classifier_lr:.2e}")
 
-            remaining_itrs = max(1, opts.total_itrs - cur_itrs)  # 최소 1로 보장
-            # Use PolyLR scheduler for Stage 2
-            scheduler = utils.PolyLR(optimizer, remaining_itrs, power=0.9)
+            # Setup scheduler for Stage 2 based on scheduler_type
+            if opts.scheduler_type == 'reduce':
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-8
+                )
+            else:
+                # Use PolyLR scheduler for other types
+                remaining_itrs = max(1, opts.total_itrs - cur_itrs)
+                scheduler = utils.PolyLR(optimizer, remaining_itrs, power=0.9)
             
             # Reset early stopping to start fresh from Stage 2
             if early_stopping is not None:
@@ -528,16 +541,17 @@ def main():
             
             optimizer.step()
             
-            # Safe scheduler step to avoid complex number errors
-            try:
-                scheduler.step()
-            except (TypeError, ValueError) as e:
-                if "complex" in str(e).lower() or "not supported" in str(e).lower():
-                    # Skip scheduler step if complex number error occurs
-                    # This happens when last_epoch > max_iters in PolyLR
-                    pass
-                else:
-                    raise e
+            # Call scheduler step (only for non-ReduceLROnPlateau schedulers)
+            if opts.scheduler_type != 'reduce':
+                try:
+                    scheduler.step()
+                except (TypeError, ValueError) as e:
+                    if "complex" in str(e).lower() or "not supported" in str(e).lower():
+                        # Skip scheduler step if complex number error occurs
+                        # This happens when last_epoch > max_iters in PolyLR
+                        pass
+                    else:
+                        raise e
 
             np_loss = loss.detach().cpu().numpy()
             epoch_loss += np_loss
@@ -577,6 +591,10 @@ def main():
             denorm=denorm
         )
 
+        # Call scheduler with validation metric (only for ReduceLROnPlateau)
+        if opts.scheduler_type == 'reduce':
+            scheduler.step(val_score['Mean IoU'])
+        
         # Display validation results with changes from previous epoch
         print(f"\n{'='*80}")
         print(f"Validation Results (Epoch {epoch}):")
@@ -707,6 +725,7 @@ def main():
 
         # WandB updates (Enhanced monitoring)
         if vis is not None:
+            # Get current learning rate (use first param group for logging)
             current_lr = optimizer.param_groups[0]['lr']
             
             # Calculate gradient norm for monitoring
@@ -885,25 +904,26 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Example usage with Weighted Cross-Entropy Loss:
 # python my_train.py \
-#     --ckpt checkpoints/ce_only2/best_model.pth \
+#     --ckpt checkpoints/weighted_ce_sweep_optim/sweep_CE_best_model.pth \
 #     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --data_root ./datasets/data \
-#     --experiment_name "weighted_ce_sweep_optim" \
+#     --experiment_name "Focal Loss with ReduceLROnPlateau Scheduler" \
 #     --epochs 200 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
-#     --lr 1e-5 \
-#     --target_max_ratio 6 \
+#     --lr 5e-6 \
+#     --target_max_ratio 5.5 \
+#     --focal_gamma 1.0 \
+#     --scheduler_type reduce \
 #     --crop_size 1024 \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "weighted-ce-sweep" \
-#     --wandb_notes "Weighted CE - optimized run with best hyperparameters" \
-#     --wandb_tags "weighted_ce,sweep,fine_tuning" \
+#     --wandb_name "Focal Loss with ReduceLROnPlateau Scheduler" \
+#     --wandb_notes "Train using Focal Loss and optimized hyperparameters and scheduler" \
+#     --wandb_tags "focal_loss,reduce_scheduler,lr5e-6,focal_gamma1.0,class_weight5.5" \
 #     --early_stop \
-#     --early_stop_patience 10 \
+#     --early_stop_patience 15 \
 #     --early_stop_min_delta 0.001 \
 #     --early_stop_metric "Mean IoU" \
 #     --subset_ratio 1.0
