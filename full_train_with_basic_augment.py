@@ -1023,23 +1023,26 @@ def main():
 if __name__ == "__main__":
     main()
 
-# python my_train_basic_augment.py \
+# python full_train_with_basic_augment.py \
 #     --data_root ./datasets/data \
-#     --experiment_name "Training with optimized parameter using basic augmentation" \
+#     --ckpt checkpoints/basic_augment_train/sweep_lr2.00e-05_weight6.5_best_model.pth \
+#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
+#     --experiment_name "Continue_Training_with_lower_LR_Basic_Augmentation" \
 #     --epochs 200 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
-#     --lr 2e-5 \
+#     --lr 5e-6 \
+#     --weight_decay 5e-4 \
 #     --target_max_ratio 6.5 \
-#     --scheduler_type reduce \
+#     --scheduler_type cosine \
 #     --crop_size 1024 \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "Training with optimized lr (basic augmentation)" \
-#     --wandb_notes "Training with basic augmentation" \
-#     --wandb_tags "lr2e-5, basic_augmentation,weighted_ce,reduce_scheduler" \
+#     --wandb_name "Continue Training with lower lr (basic augmentation)" \
+#     --wandb_notes "Training with basic augmentation - reduced LR and cosine scheduler" \
+#     --wandb_tags "lr5e-6,basic_augmentation,weighted_ce,cosine_scheduler,reduced_lr" \
 #     --early_stop \
 #     --early_stop_patience 3 \
-#     --early_stop_min_delta 0.005 \
+#     --early_stop_min_delta 0.001 \
 #     --early_stop_metric "Mean IoU" \
 #     --subset_ratio 1.0
