@@ -257,5 +257,5 @@ if __name__ == "__main__":
 
 # python my_prediction_for_submit.py \
 #     --dataset_dir /mnt/c/Users/user/Desktop/eogus/dataset/2025dna/SemanticDatasetTest \
-#     --weight_path checkpoints/baseline/deeplabv3_mobilenet_dna2025dataset_baseline.pth \
-#     --result_dir ./results_deeplabv3_baseline
+#     --weight_path checkpoints/weighted_ce_sweep_optim/sweep_CE_best_model.pth \
+#     --result_dir ./results_deeplabv3_optimized_ce

@@ -436,8 +436,7 @@ def main():
         early_stopping = EarlyStopping(
             patience=opts.early_stop_patience,
             min_delta=opts.early_stop_min_delta,
-            mode='max',  # Mean IoU, Accuracy 등은 maximize
-            verbose=True
+            mode='max'  # Mean IoU, Accuracy 등은 maximize
         )
         print(f"\n✓ Early Stopping enabled:")
         print(f"  Patience: {opts.early_stop_patience} epochs")
@@ -488,11 +487,10 @@ def main():
             elif opts.scheduler_type == 'plateau':
                 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer, 
-                    mode='max',           # mIoU 최대화
-                    factor=0.5,           # 절반으로 감소
-                    patience=5,           # 5 epoch 동안 개선 없으면 감소
-                    min_lr=1e-8,          # 최소 LR
-                    verbose=True          # LR 감소 시 로그 출력
+                    mode='max',       # mIoU 최대화
+                    factor=0.5,          # 절반으로 감소
+                    patience=5,          # 5 epoch 동안 개선 없으면 감소
+                    min_lr=1e-8          # 최소 LR
                 )
                 print("ReduceLROnPlateau scheduler created")
             
@@ -549,18 +547,16 @@ def main():
             optimizer.step()
             
             # Scheduler step based on scheduler type
-            try:
-                if opts.scheduler_type == 'cosine':
+            # Note: plateau scheduler will be handled after validation
+            if opts.scheduler_type == 'cosine':
+                try:
                     scheduler.step()
-                elif opts.scheduler_type == 'plateau':
-                    # ReduceLROnPlateau needs validation metric
-                    scheduler.step(val_score['Mean IoU'])
-            except (TypeError, ValueError) as e:
-                if "complex" in str(e).lower() or "not supported" in str(e).lower():
-                    # Skip scheduler step if complex number error occurs
-                    pass
-                else:
-                    raise e
+                except (TypeError, ValueError) as e:
+                    if "complex" in str(e).lower() or "not supported" in str(e).lower():
+                        # Skip scheduler step if complex number error occurs
+                        pass
+                    else:
+                        raise e
 
             np_loss = loss.detach().cpu().numpy()
             epoch_loss += np_loss
@@ -599,6 +595,17 @@ def main():
             save_sample_images=save_images_this_epoch,
             denorm=denorm
         )
+
+        # Handle plateau scheduler after validation
+        if opts.scheduler_type == 'plateau':
+            try:
+                scheduler.step(val_score['Mean IoU'])
+            except (TypeError, ValueError) as e:
+                if "complex" in str(e).lower() or "not supported" in str(e).lower():
+                    # Skip scheduler step if complex number error occurs
+                    pass
+                else:
+                    raise e
 
         # Display validation results with changes from previous epoch
         print(f"\n{'='*80}")

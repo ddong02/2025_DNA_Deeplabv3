@@ -21,3 +21,4 @@ test_results_folder/
 overlay_output/
 class_weights/class_weight_new.pth
 class_weights/class_weight_old_data.pth
+results_deeplabv3_optimized_ce/
