@@ -151,7 +151,9 @@ class DNA2025Dataset(Dataset):
         self.class_names = self.CLASS_NAMES
         self.color_palette = self.COLOR_PALETTE
         
-        np.random.seed(random_seed)
+        # Only set seed for subset sampling, not for augmentation
+        if subset_ratio < 1.0:
+            np.random.seed(random_seed)
         
         base_dir = os.path.join(root_dir, "SemanticDataset_final")
         self.image_paths = []

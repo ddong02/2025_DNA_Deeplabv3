@@ -11,7 +11,7 @@ name: "basic_augmentation_sweep with Sweep_CE_best_model"
 parameters:
   # Learning rate sweep around 1e-5 baseline
   lr:
-    values: [5e-6, 8e-6, 1e-5, 2e-5, 3e-5]
+    values: [5e-6, 1e-5, 1.5e-5, 2e-5, 3e-5]
   
   # Weight decay for regularization
   weight_decay:
@@ -23,7 +23,7 @@ parameters:
   
   # Training settings
   epochs:
-    value: 35
+    value: 30
   batch_size:
     value: 4
   val_batch_size:
@@ -55,7 +55,7 @@ parameters:
   
   # Training flags
   early_stop_patience:
-    value: 10
+    value: 5
   early_stop_min_delta:
     value: 0.001
   early_stop_metric:

@@ -69,18 +69,31 @@ def format_time(seconds):
 def get_augmented_training_samples(train_loader, num_samples=2, device='cuda'):
     """Get augmented training samples for WandB visualization"""
     import matplotlib.pyplot as plt
+    import random
+    import time
     
     samples = []
-    train_loader_iter = iter(train_loader)
     
+    # Get the dataset from the loader
+    dataset = train_loader.dataset
+    
+    # Use current time as seed for true randomness
+    random.seed(int(time.time() * 1000) % 2**32)
+    
+    # Get random samples directly from dataset
     for i in range(num_samples):
         try:
-            # Get next batch from training loader
-            images, labels = next(train_loader_iter)
+            # Get random index from dataset
+            random_idx = random.randint(0, len(dataset) - 1)
             
-            # Take first image from batch
-            img_tensor = images[0].cpu()
-            label_tensor = labels[0].cpu()
+            # Get sample directly from dataset (this will apply augmentation)
+            img_tensor, label_tensor = dataset[random_idx]
+            
+            # Move to CPU if needed
+            if img_tensor.is_cuda:
+                img_tensor = img_tensor.cpu()
+            if label_tensor.is_cuda:
+                label_tensor = label_tensor.cpu()
             
             # Denormalize image
             mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
@@ -108,45 +121,6 @@ def get_augmented_training_samples(train_loader, num_samples=2, device='cuda'):
             overlay = (overlay * 0.7 + colored_label_rgb * 255 * 0.3).astype(np.uint8)
             
             # Resize to reduce WandB overhead (512x512 -> 256x256)
-            overlay_resized = torch.nn.functional.interpolate(
-                torch.from_numpy(overlay).permute(2, 0, 1).unsqueeze(0).float(),
-                size=(256, 256),
-                mode='bilinear',
-                align_corners=False
-            ).squeeze(0).permute(1, 2, 0).numpy().astype(np.uint8)
-            
-            samples.append(overlay_resized)
-            
-        except StopIteration:
-            # If we run out of data, restart the iterator
-            train_loader_iter = iter(train_loader)
-            images, labels = next(train_loader_iter)
-            
-            # Process the sample (same as above)
-            img_tensor = images[0].cpu()
-            label_tensor = labels[0].cpu()
-            
-            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-            img_denorm = img_tensor * std + mean
-            img_denorm = torch.clamp(img_denorm, 0, 1)
-            img_denorm = img_denorm.permute(1, 2, 0).numpy()
-            img_denorm = (img_denorm * 255).astype(np.uint8)
-            
-            label_np = label_tensor.numpy()
-            
-            # Handle ignore index (255) by clipping to valid range
-            label_np_clipped = np.clip(label_np, 0, 19)  # Clip to valid class range (0-19)
-            
-            color_map = plt.cm.tab20(np.linspace(0, 1, 20))
-            colored_label = color_map[label_np_clipped]
-            
-            # Convert colored_label from RGBA to RGB (remove alpha channel)
-            colored_label_rgb = colored_label[:, :, :3]  # Take only RGB channels
-            
-            overlay = img_denorm.copy()
-            overlay = (overlay * 0.7 + colored_label_rgb * 255 * 0.3).astype(np.uint8)
-            
             overlay_resized = torch.nn.functional.interpolate(
                 torch.from_numpy(overlay).permute(2, 0, 1).unsqueeze(0).float(),
                 size=(256, 256),
@@ -211,7 +185,8 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Device: %s" % device)
 
-    # Setup random seed
+    # Setup random seed (only for reproducibility, not for augmentation)
+    # Note: Augmentation will be truly random for variety
     torch.manual_seed(opts.random_seed)
     np.random.seed(opts.random_seed)
     random.seed(opts.random_seed)
