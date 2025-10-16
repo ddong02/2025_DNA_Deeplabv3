@@ -1,0 +1,67 @@
+# Sweep basic augmentation with optimized hyperparameters trained CE_best_model
+
+program: my_train_basic_augment.py
+method: grid
+metric:
+  goal: maximize
+  name: "[Val] Mean IoU"
+project: "deeplabv3-segmentation"
+name: "basic_augmentation_sweep with Sweep_CE_best_model"
+
+parameters:
+  # Learning rate sweep around 1e-5 baseline
+  lr:
+    values: [5e-6, 8e-6, 1e-5, 2e-5, 3e-5]
+  
+  # Weight decay for regularization
+  weight_decay:
+    values: [1e-5, 1e-4, 1e-3]
+  
+  # Class weights ratio variations
+  target_max_ratio:
+    values: [5.5, 6.5, 7.5]
+  
+  # Training settings
+  epochs:
+    value: 35
+  batch_size:
+    value: 4
+  val_batch_size:
+    value: 4
+  crop_size:
+    value: 1024
+  
+  # Dataset and model settings
+  data_root:
+    value: "./datasets/data"
+  ckpt:
+    value: "checkpoints/weighted_ce_sweep_optim/sweep_CE_best_model.pth"
+  class_weights_file:
+    value: "class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth"
+  
+  # Experiment settings
+  experiment_name:
+    value: "basic_augmentation_sweep"
+  
+  # WandB settings
+  wandb_project:
+    value: "deeplabv3-segmentation"
+  wandb_name:
+    value: "Basic Augmentation Sweep"
+  wandb_notes:
+    value: "Basic augmentation sweep: Hflip, Brightness/Contrast, Rotation + Weighted CE Loss"
+  wandb_tags:
+    value: "basic_augmentation,weighted_ce,sweep,no_backbone_freeze"
+  
+  # Training flags
+  early_stop_patience:
+    value: 10
+  early_stop_min_delta:
+    value: 0.001
+  early_stop_metric:
+    value: "Mean IoU"
+  
+  # Use subset for faster experimentation
+  subset_ratio:
+    value: 1.0
+  

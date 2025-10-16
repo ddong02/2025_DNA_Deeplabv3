@@ -908,22 +908,22 @@ if __name__ == "__main__":
 #     --ckpt checkpoints/weighted_ce_sweep_optim/sweep_CE_best_model.pth \
 #     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --data_root ./datasets/data \
-#     --experiment_name "Focal Loss with Cosine Scheduler3" \
+#     --experiment_name "Focal Loss with Cosine Scheduler2" \
 #     --epochs 200 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
-#     --lr 5e-6 \
-#     --target_max_ratio 8.0 \
-#     --focal_gamma 1.5 \
+#     --lr 1e-5 \
+#     --target_max_ratio 6.0 \
+#     --focal_gamma 2.0 \
 #     --scheduler_type cosine \
 #     --crop_size 1024 \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "Focal Loss with Cosine Scheduler3" \
-#     --wandb_notes "change hyperparameters: lr=5e-6, focal_gamma=1.5, target_ratio=8.0" \
-#     --wandb_tags "conservative,stable,lr5e-6,gamma1.5" \
+#     --wandb_name "Focal Loss with Cosine Scheduler2" \
+#     --wandb_notes "change hyperparameters: lr=1e-5, focal_gamma=2.0, target_ratio=6.0" \
+#     --wandb_tags "focal_loss,cosine-scheduler,lr1e-5,focal_gamma2.0" \
 #     --early_stop \
-#     --early_stop_patience 15 \
+#     --early_stop_patience 20 \
 #     --early_stop_min_delta 0.001 \
 #     --early_stop_metric "Mean IoU" \
 #     --subset_ratio 1.0

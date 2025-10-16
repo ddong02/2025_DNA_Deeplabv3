@@ -103,8 +103,8 @@ def get_argparser():
                              "Useful for quick testing (e.g., 0.05 for 5% of data)")
     
     # Class weights optimization 관련 인자
-    parser.add_argument("--target_max_ratio", type=float, default=10.0,
-                        help="Maximum ratio for class weights clipping (default: 10.0). "
+    parser.add_argument("--target_max_ratio", type=float, default=6.5,
+                        help="Maximum ratio for class weights clipping (default: 6.5). "
                              "Used for WandB sweep optimization.")
     
     # Learning rate scheduler 관련 인자
@@ -118,5 +118,9 @@ def get_argparser():
                              "Higher values focus more on hard examples. Default: 2.0")
     parser.add_argument("--use_focal_loss", action='store_true', default=True,
                         help="Use Focal Loss instead of Cross-Entropy Loss")
+    
+    # Backbone freezing 관련 인자
+    parser.add_argument("--freeze_backbone", action='store_true', default=False,
+                        help="Freeze backbone parameters during training (default: False)")
 
     return parser

@@ -32,6 +32,7 @@ from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_che
 from my_utils.early_stopping import EarlyStopping
 from my_utils.calculate_class_weights import calculate_class_weights
 from my_utils.losses import CombinedLoss, FocalLoss
+import torch.nn.functional as F
 
 
 def get_dataset(opts):
@@ -63,6 +64,105 @@ def format_time(seconds):
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def get_augmented_training_samples(train_loader, num_samples=2, device='cuda'):
+    """Get augmented training samples for WandB visualization"""
+    import matplotlib.pyplot as plt
+    
+    samples = []
+    train_loader_iter = iter(train_loader)
+    
+    for i in range(num_samples):
+        try:
+            # Get next batch from training loader
+            images, labels = next(train_loader_iter)
+            
+            # Take first image from batch
+            img_tensor = images[0].cpu()
+            label_tensor = labels[0].cpu()
+            
+            # Denormalize image
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+            img_denorm = img_tensor * std + mean
+            img_denorm = torch.clamp(img_denorm, 0, 1)
+            img_denorm = img_denorm.permute(1, 2, 0).numpy()
+            img_denorm = (img_denorm * 255).astype(np.uint8)
+            
+            # Create label visualization
+            label_np = label_tensor.numpy()
+            
+            # Handle ignore index (255) by clipping to valid range
+            label_np_clipped = np.clip(label_np, 0, 19)  # Clip to valid class range (0-19)
+            
+            # Create overlay with label
+            color_map = plt.cm.tab20(np.linspace(0, 1, 20))
+            colored_label = color_map[label_np_clipped]
+            
+            # Convert colored_label from RGBA to RGB (remove alpha channel)
+            colored_label_rgb = colored_label[:, :, :3]  # Take only RGB channels
+            
+            # Create overlay image (image + label with transparency)
+            overlay = img_denorm.copy()
+            overlay = (overlay * 0.7 + colored_label_rgb * 255 * 0.3).astype(np.uint8)
+            
+            # Resize to reduce WandB overhead (512x512 -> 256x256)
+            overlay_resized = torch.nn.functional.interpolate(
+                torch.from_numpy(overlay).permute(2, 0, 1).unsqueeze(0).float(),
+                size=(256, 256),
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(0).permute(1, 2, 0).numpy().astype(np.uint8)
+            
+            samples.append(overlay_resized)
+            
+        except StopIteration:
+            # If we run out of data, restart the iterator
+            train_loader_iter = iter(train_loader)
+            images, labels = next(train_loader_iter)
+            
+            # Process the sample (same as above)
+            img_tensor = images[0].cpu()
+            label_tensor = labels[0].cpu()
+            
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+            img_denorm = img_tensor * std + mean
+            img_denorm = torch.clamp(img_denorm, 0, 1)
+            img_denorm = img_denorm.permute(1, 2, 0).numpy()
+            img_denorm = (img_denorm * 255).astype(np.uint8)
+            
+            label_np = label_tensor.numpy()
+            
+            # Handle ignore index (255) by clipping to valid range
+            label_np_clipped = np.clip(label_np, 0, 19)  # Clip to valid class range (0-19)
+            
+            color_map = plt.cm.tab20(np.linspace(0, 1, 20))
+            colored_label = color_map[label_np_clipped]
+            
+            # Convert colored_label from RGBA to RGB (remove alpha channel)
+            colored_label_rgb = colored_label[:, :, :3]  # Take only RGB channels
+            
+            overlay = img_denorm.copy()
+            overlay = (overlay * 0.7 + colored_label_rgb * 255 * 0.3).astype(np.uint8)
+            
+            overlay_resized = torch.nn.functional.interpolate(
+                torch.from_numpy(overlay).permute(2, 0, 1).unsqueeze(0).float(),
+                size=(256, 256),
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(0).permute(1, 2, 0).numpy().astype(np.uint8)
+            
+            samples.append(overlay_resized)
+            
+        except Exception as e:
+            print(f"⚠️ Error getting augmented sample {i+1}: {e}")
+            # Create a dummy sample if error occurs
+            dummy_sample = np.zeros((256, 256, 3), dtype=np.uint8)
+            samples.append(dummy_sample)
+    
+    return samples
 
 
 def main():
@@ -289,19 +389,17 @@ def main():
     print(f"Classes unchanged: {sum(1 for w in class_weights if w.item() not in [min_weight_threshold, max_weight_threshold])}")
     print("="*80)
     
-    # Loss function: Focal Loss with class weights
-    criterion = FocalLoss(
-        alpha=class_weights,
-        gamma=opts.focal_gamma,
+    # Loss function: Weighted Cross Entropy with class weights
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights,
         ignore_index=255
     )
     
     print("\n✓ Loss Function Configuration:")
-    print(f"  Type: Focal Loss")
-    print(f"  Gamma: {opts.focal_gamma}")
+    print(f"  Type: Weighted Cross Entropy")
     print(f"  Class Weights: Applied (sqrt_inv_freq method)")
     print(f"  Weight Ratio: {final_ratio:.1f}x (clipped to max {target_max_ratio:.0f}x)")
-    print(f"  This configuration focuses on hard examples while balancing class importance")
+    print(f"  This configuration balances class importance with standard cross entropy")
 
     print("="*80 + "\n")
 
@@ -342,22 +440,35 @@ def main():
         print("[!] Training from scratch")
         continue_from_checkpoint = False
 
-    # STAGE 1: Freeze backbone
-    print("--- STAGE 1 SETUP: Training classifier only ---")
-    for param in model.backbone.parameters():
-        param.requires_grad = False
-    
-    trainable_params_stage1 = filter(lambda p: p.requires_grad, model.parameters())
-    
-    # Using full learning rate with Weighted CE Loss
-    print(f"Stage 1 Learning Rate: {opts.lr:.2e}")
-    
-    optimizer = torch.optim.SGD(
-        params=trainable_params_stage1, 
-        lr=opts.lr,
-        momentum=0.9, 
-        weight_decay=opts.weight_decay
-    )
+    # Backbone freezing setup
+    if opts.freeze_backbone:
+        # STAGE 1: Freeze backbone
+        print("--- STAGE 1 SETUP: Training classifier only ---")
+        for param in model.backbone.parameters():
+            param.requires_grad = False
+        
+        trainable_params_stage1 = filter(lambda p: p.requires_grad, model.parameters())
+        
+        # Using full learning rate with Weighted CE Loss
+        print(f"Stage 1 Learning Rate: {opts.lr:.2e}")
+        
+        optimizer = torch.optim.SGD(
+            params=trainable_params_stage1, 
+            lr=opts.lr,
+            momentum=0.9, 
+            weight_decay=opts.weight_decay
+        )
+    else:
+        # Train entire network from the beginning
+        print("--- TRAINING ENTIRE NETWORK: No backbone freezing ---")
+        print(f"Learning Rate: {opts.lr:.2e}")
+        
+        optimizer = torch.optim.SGD(
+            params=model.parameters(), 
+            lr=opts.lr,
+            momentum=0.9, 
+            weight_decay=opts.weight_decay
+        )
 
     # Setup scheduler based on scheduler_type
     if opts.scheduler_type == 'reduce':
@@ -459,8 +570,8 @@ def main():
     for epoch in range(start_epoch, opts.epochs + 1):
         epoch_start_time = time.time()
         
-        # STAGE 2: Unfreeze backbone
-        if epoch == opts.unfreeze_epoch:
+        # STAGE 2: Unfreeze backbone (only if freeze_backbone is enabled)
+        if opts.freeze_backbone and epoch == opts.unfreeze_epoch:
             print(f"\n--- STAGE 2: Unfreezing backbone at Epoch {epoch} ---")
             
             for param in model.module.backbone.parameters():
@@ -494,8 +605,8 @@ def main():
                 early_stopping.reset()
                 print(f"[Early Stopping] Reset for Stage 2 - will set baseline after this epoch's validation")
         
-        # Handle continue training from STAGE 2
-        elif continue_from_checkpoint and epoch > opts.unfreeze_epoch:
+        # Handle continue training from STAGE 2 (only if freeze_backbone is enabled)
+        elif opts.freeze_backbone and continue_from_checkpoint and epoch > opts.unfreeze_epoch:
             print(f"\n--- Continue training in STAGE 2 (Epoch {epoch}) ---")
             # Ensure backbone is unfrozen for continue training in Stage 2
             for param in model.module.backbone.parameters():
@@ -523,7 +634,10 @@ def main():
         num_batches = 0
         interval_loss = 0.0
         
-        stage_str = '2 (Fine-tuning)' if epoch >= opts.unfreeze_epoch else '1 (Classifier only)'
+        if opts.freeze_backbone:
+            stage_str = '2 (Fine-tuning)' if epoch >= opts.unfreeze_epoch else '1 (Classifier only)'
+        else:
+            stage_str = 'Full Network Training'
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{end_epoch} [Stage {stage_str}]")
         
         for images, labels in progress_bar:
@@ -656,17 +770,20 @@ def main():
         prev_metrics['Class IoU'] = val_score['Class IoU'].copy()
 
         # ===== Early Stopping Check =====
-        # Only apply early stopping in Stage 2 (after backbone is unfrozen)
-        if early_stopping is not None and epoch >= opts.unfreeze_epoch:
+        # Apply early stopping based on freeze_backbone setting
+        if early_stopping is not None and (not opts.freeze_backbone or epoch >= opts.unfreeze_epoch):
             monitor_score = val_score[opts.early_stop_metric]
             
-            # First epoch of Stage 2: set baseline
-            if epoch == opts.unfreeze_epoch:
+            # Set baseline for early stopping
+            if (opts.freeze_backbone and epoch == opts.unfreeze_epoch) or (not opts.freeze_backbone and epoch == 1):
                 early_stopping.set_baseline(monitor_score)
-                print(f"[Early Stopping] Stage 2 baseline set: {monitor_score:.4f}")
+                if opts.freeze_backbone:
+                    print(f"[Early Stopping] Stage 2 baseline set: {monitor_score:.4f}")
+                else:
+                    print(f"[Early Stopping] Baseline set at epoch 1: {monitor_score:.4f}")
                 print(f"[Early Stopping] Will monitor improvements from this point")
             else:
-                # From second epoch of Stage 2 onwards, check for improvements
+                # Check for improvements
                 should_stop = early_stopping(monitor_score, epoch)
                 
                 if should_stop:
@@ -736,8 +853,12 @@ def main():
                     total_norm += param_norm.item() ** 2
             total_norm = total_norm ** 0.5
             
-            # Log all metrics in one batch to avoid step conflicts
+            # Get augmented training samples for visualization
             try:
+                # Get 2 augmented samples from training data
+                augmented_samples = get_augmented_training_samples(train_loader, num_samples=2, device=device)
+                
+                # Log all metrics and augmented images in one batch
                 wandb.log({
                     'epoch': epoch,
                     'Training Loss': avg_epoch_loss,
@@ -746,10 +867,26 @@ def main():
                     '[Val] Mean Acc': val_score['Mean Acc'],
                     '[Val] Mean IoU': val_score['Mean IoU'],
                     'Gradient Norm': total_norm,
+                    'Augmented Train Sample 1': wandb.Image(augmented_samples[0], caption=f'Epoch {epoch} - Augmented Sample 1'),
+                    'Augmented Train Sample 2': wandb.Image(augmented_samples[1], caption=f'Epoch {epoch} - Augmented Sample 2'),
                 }, step=epoch)
-                print(f"✅ WandB log successful for epoch {epoch}")
+                print(f"✅ WandB log successful for epoch {epoch} (including augmented samples)")
             except Exception as e:
                 print(f"❌ WandB log failed: {e}")
+                # Fallback: log without augmented images
+                try:
+                    wandb.log({
+                        'epoch': epoch,
+                        'Training Loss': avg_epoch_loss,
+                        'Learning Rate': current_lr,
+                        '[Val] Overall Acc': val_score['Overall Acc'],
+                        '[Val] Mean Acc': val_score['Mean Acc'],
+                        '[Val] Mean IoU': val_score['Mean IoU'],
+                        'Gradient Norm': total_norm,
+                    }, step=epoch)
+                    print(f"✅ WandB fallback log successful for epoch {epoch}")
+                except Exception as e2:
+                    print(f"❌ WandB fallback log also failed: {e2}")
             
             # Log class IoU table with same step
             vis.vis_table("[Val] Class IoU", val_score['Class IoU'], step=epoch)
@@ -872,13 +1009,20 @@ def main():
         print(f"  Estimated remaining: {format_time(estimated_remaining)} | "
               f"ETA: {time.strftime('%H:%M:%S', time.localtime(time.time() + estimated_remaining))}")
         
-        # Early stopping status (only show in Stage 2)
-        if early_stopping is not None and epoch > opts.unfreeze_epoch and not early_stopping.early_stop:
-            print(f"  Early stop counter: {early_stopping.counter}/{early_stopping.patience}")
-        elif early_stopping is not None and epoch == opts.unfreeze_epoch:
-            print(f"  Early stopping: Baseline set at {early_stopping.best_score:.4f} (monitoring starts next epoch)")
-        elif early_stopping is not None and epoch < opts.unfreeze_epoch:
-            print(f"  Early stopping: Inactive (Stage 1 - will activate at epoch {opts.unfreeze_epoch})")
+        # Early stopping status
+        if early_stopping is not None:
+            if opts.freeze_backbone:
+                if epoch > opts.unfreeze_epoch and not early_stopping.early_stop:
+                    print(f"  Early stop counter: {early_stopping.counter}/{early_stopping.patience}")
+                elif epoch == opts.unfreeze_epoch:
+                    print(f"  Early stopping: Baseline set at {early_stopping.best_score:.4f} (monitoring starts next epoch)")
+                elif epoch < opts.unfreeze_epoch:
+                    print(f"  Early stopping: Inactive (Stage 1 - will activate at epoch {opts.unfreeze_epoch})")
+            else:
+                if epoch > 1 and not early_stopping.early_stop:
+                    print(f"  Early stop counter: {early_stopping.counter}/{early_stopping.patience}")
+                elif epoch == 1:
+                    print(f"  Early stopping: Baseline set at {early_stopping.best_score:.4f} (monitoring starts next epoch)")
         
         print()
 
@@ -904,26 +1048,23 @@ def main():
 if __name__ == "__main__":
     main()
 
-# python my_train.py \
-#     --ckpt checkpoints/weighted_ce_sweep_optim/sweep_CE_best_model.pth \
-#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
+# python my_train_basic_augment.py \
 #     --data_root ./datasets/data \
-#     --experiment_name "Focal Loss with Cosine Scheduler3" \
+#     --experiment_name "Basic Augmentation with Weighted CE" \
 #     --epochs 200 \
 #     --batch_size 4 \
 #     --val_batch_size 4 \
-#     --lr 5e-6 \
-#     --target_max_ratio 8.0 \
-#     --focal_gamma 1.5 \
-#     --scheduler_type cosine \
+#     --lr 1e-5 \
+#     --target_max_ratio 6.5 \
+#     --scheduler_type reduce \
 #     --crop_size 1024 \
 #     --enable_vis \
 #     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "Focal Loss with Cosine Scheduler3" \
-#     --wandb_notes "change hyperparameters: lr=5e-6, focal_gamma=1.5, target_ratio=8.0" \
-#     --wandb_tags "conservative,stable,lr5e-6,gamma1.5" \
+#     --wandb_name "Basic Augmentation with Weighted CE" \
+#     --wandb_notes "Data augmentation: Hflip, Brightness/Contrast, Rotation + Weighted CE Loss" \
+#     --wandb_tags "basic_augmentation,weighted_ce,reduce_scheduler" \
 #     --early_stop \
-#     --early_stop_patience 15 \
+#     --early_stop_patience 20 \
 #     --early_stop_min_delta 0.001 \
 #     --early_stop_metric "Mean IoU" \
 #     --subset_ratio 1.0

@@ -17,7 +17,7 @@ import torchvision.transforms.functional as F
 
 
 class ExtSegmentationTransform:
-    """Transform for training: random scale, crop, flip, normalize"""
+    """Transform for training: random scale, crop, brightness/contrast, rotation, flip, normalize"""
     def __init__(self, crop_size=[1024, 1024], scale_range=[0.5, 1.5]):
         self.crop_size = crop_size
         self.scale_range = scale_range
@@ -52,6 +52,20 @@ class ExtSegmentationTransform:
             
             image = F.crop(image, i, j, th, tw)
             label = F.crop(label, i, j, th, tw)
+        
+        # NEW: Brightness & Contrast augmentation (only for image)
+        if random.random() > 0.5:
+            brightness_factor = random.uniform(0.8, 1.2)
+            contrast_factor = random.uniform(0.8, 1.2)
+            image = F.adjust_brightness(image, brightness_factor)
+            image = F.adjust_contrast(image, contrast_factor)
+            # Note: label is not affected by brightness/contrast changes
+        
+        # NEW: Small rotation (both image and label)
+        if random.random() > 0.5:
+            angle = random.uniform(-10, 10)  # ±10도 회전
+            image = F.rotate(image, angle, fill=0)  # Black fill for image
+            label = F.rotate(label, angle, fill=255)  # Ignore index for label
         
         # Random horizontal flip
         if random.random() > 0.5:
