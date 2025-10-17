@@ -30,8 +30,7 @@ def get_advanced_augmentation(config):
         advanced.append(
             A.OneOf([
                 A.RandomRain(
-                    slant_lower=-10, 
-                    slant_upper=10,
+                    slant_range=(-10, 10),
                     drop_length=20,
                     drop_width=1,
                     drop_color=(200, 200, 200),
@@ -40,16 +39,12 @@ def get_advanced_augmentation(config):
                     p=1
                 ),
                 A.RandomFog(
-                    fog_coef_lower=0.1,
-                    fog_coef_upper=0.3,
+                    fog_coef_range=(0.1, 0.3),
                     alpha_coef=0.1,
                     p=1
                 ),
                 A.RandomShadow(
                     shadow_roi=(0, 0.5, 1, 1),
-                    num_shadows_lower=1,
-                    num_shadows_upper=2,
-                    shadow_dimension=5,
                     p=1
                 ),
             ], p=weather_p)
@@ -60,7 +55,7 @@ def get_advanced_augmentation(config):
         noise_p = config.get('noise_p', 0.3)
         advanced.append(
             A.OneOf([
-                A.GaussNoise(var_limit=(10, 50), p=1),
+                A.GaussNoise(p=1),
                 A.ISONoise(p=1),
                 A.MultiplicativeNoise(p=1),
             ], p=noise_p)
@@ -83,10 +78,6 @@ def get_advanced_augmentation(config):
         advanced.append(
             A.OneOf([
                 A.CoarseDropout(
-                    max_holes=8,
-                    max_height=32,
-                    max_width=32,
-                    fill_value=0,
                     p=1
                 ),
                 A.GridDropout(ratio=0.2, p=1),
@@ -101,7 +92,6 @@ def get_advanced_augmentation(config):
                 A.ElasticTransform(
                     alpha=50,
                     sigma=5,
-                    alpha_affine=5,
                     p=1
                 ),
                 A.GridDistortion(
@@ -111,7 +101,6 @@ def get_advanced_augmentation(config):
                 ),
                 A.OpticalDistortion(
                     distort_limit=0.1,
-                    shift_limit=0.1,
                     p=1
                 ),
             ], p=geometric_p)
@@ -138,7 +127,9 @@ def get_advanced_augmentation(config):
             ], p=color_p)
         )
     
-    return A.Compose(basic + advanced + [
+    return A.Compose([
+        A.Resize(height=1024, width=1024),  # 크기 고정
+    ] + basic + advanced + [
         A.Normalize(mean=(0.485, 0.456, 0.406), 
                    std=(0.229, 0.224, 0.225)),
         ToTensorV2()
@@ -148,6 +139,7 @@ def get_advanced_augmentation(config):
 def get_validation_transform():
     """Validation용 Transform (증강 없음)"""
     return A.Compose([
+        A.Resize(height=1024, width=1024),  # 크기 고정
         A.Normalize(mean=(0.485, 0.456, 0.406), 
                    std=(0.229, 0.224, 0.225)),
         ToTensorV2()
