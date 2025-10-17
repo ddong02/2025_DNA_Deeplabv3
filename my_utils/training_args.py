@@ -136,32 +136,32 @@ def get_argparser():
     # PyTorch 기반 고급 증강 파라미터들 제거됨 (Albumentations로 대체)
     
     # Albumentations 고급 증강 파라미터들
-    parser.add_argument("--use_weather", action='store_true', default=False,
+    parser.add_argument("--use_weather", type=bool, default=False,
                         help="Use weather simulation (rain, fog, shadow)")
     parser.add_argument("--weather_p", type=float, default=0.3,
                         help="Weather simulation probability (0.0-1.0, default: 0.3)")
     
-    parser.add_argument("--use_noise", action='store_true', default=False,
+    parser.add_argument("--use_noise", type=bool, default=False,
                         help="Use noise addition (Gaussian, ISO, Multiplicative)")
     parser.add_argument("--noise_p", type=float, default=0.3,
                         help="Noise addition probability (0.0-1.0, default: 0.3)")
     
-    parser.add_argument("--use_blur", action='store_true', default=False,
+    parser.add_argument("--use_blur", type=bool, default=False,
                         help="Use blur effects (Motion, Median, Gaussian)")
     parser.add_argument("--blur_p", type=float, default=0.3,
                         help="Blur effects probability (0.0-1.0, default: 0.3)")
     
-    parser.add_argument("--use_cutout", action='store_true', default=False,
+    parser.add_argument("--use_cutout", type=bool, default=False,
                         help="Use CutOut effects (CoarseDropout, GridDropout)")
     parser.add_argument("--cutout_p", type=float, default=0.3,
                         help="CutOut effects probability (0.0-1.0, default: 0.3)")
     
-    parser.add_argument("--use_geometric", action='store_true', default=False,
+    parser.add_argument("--use_geometric", type=bool, default=False,
                         help="Use geometric transforms (Elastic, Grid, Optical)")
     parser.add_argument("--geometric_p", type=float, default=0.3,
                         help="Geometric transform probability (0.0-1.0, default: 0.3)")
     
-    parser.add_argument("--use_color", action='store_true', default=False,
+    parser.add_argument("--use_color", type=bool, default=False,
                         help="Use color transforms (HueSaturation, RGBShift, ChannelShuffle)")
     parser.add_argument("--color_p", type=float, default=0.3,
                         help="Color transform probability (0.0-1.0, default: 0.3)")
