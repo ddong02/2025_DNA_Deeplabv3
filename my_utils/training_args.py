@@ -80,8 +80,8 @@ def get_argparser():
                         help='number of samples for visualization (default: 4)')
     
     # Early Stopping 관련 인자 추가
-    parser.add_argument("--early_stop", action='store_true', default=True,
-                        help="Enable early stopping")
+    parser.add_argument("--early_stop", type=bool, default=False,
+                    help="Enable early stopping (True/False)")
     parser.add_argument("--early_stop_patience", type=int, default=10,
                         help="Early stopping patience (epochs without improvement)")
     parser.add_argument("--early_stop_min_delta", type=float, default=0.0001,
@@ -106,6 +106,20 @@ def get_argparser():
     parser.add_argument("--target_max_ratio", type=float, default=6.5,
                         help="Maximum ratio for class weights clipping (default: 6.5). "
                              "Used for WandB sweep optimization.")
+    
+    # Optimizer 관련 인자
+    parser.add_argument("--optimizer", type=str, default='sgd_nesterov',
+                        choices=['sgd', 'sgd_nesterov', 'adamw', 'radam'],
+                        help="Optimizer type: sgd, sgd_nesterov, adamw, radam")
+    
+    # Warmup 관련 인자
+    parser.add_argument("--warmup_epochs", type=int, default=0,
+                        help="Number of warmup epochs (0 to disable warmup)")
+    parser.add_argument("--warmup_start_lr", type=float, default=None,
+                        help="Starting learning rate for warmup (default: lr/10)")
+    parser.add_argument("--warmup_scheduler", type=str, default='linear',
+                        choices=['linear', 'cosine'],
+                        help="Warmup scheduler type: linear or cosine")
     
     # Learning rate scheduler 관련 인자
     parser.add_argument("--scheduler_type", type=str, default='cosine', 

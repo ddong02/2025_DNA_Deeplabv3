@@ -138,6 +138,24 @@ def format_time(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+def get_warmup_scheduler(optimizer, total_epochs, warmup_epochs, warmup_start_lr, warmup_scheduler='linear'):
+    """Create warmup scheduler with cosine annealing"""
+    import math
+    
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            # Warmup phase
+            if warmup_scheduler == 'linear':
+                return warmup_start_lr + (1.0 - warmup_start_lr) * (epoch / warmup_epochs)
+            elif warmup_scheduler == 'cosine':
+                return warmup_start_lr + (1.0 - warmup_start_lr) * 0.5 * (1 + math.cos(math.pi * (1 - epoch / warmup_epochs)))
+        else:
+            # Cosine annealing phase
+            return 0.5 * (1 + math.cos(math.pi * (epoch - warmup_epochs) / (total_epochs - warmup_epochs)))
+    
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
 def get_augmented_training_samples(train_loader, num_samples=2, device='cuda'):
     """Get augmented training samples for WandB visualization"""
     import matplotlib.pyplot as plt
@@ -308,7 +326,9 @@ def main():
     print(f"Learning Rate:     {opts.lr:.2e}")
     print(f"Weight Decay:      {opts.weight_decay:.2e}")
     print(f"Target Max Ratio:  {opts.target_max_ratio}")
+    print(f"Optimizer:         {opts.optimizer}")
     print(f"Scheduler:         {opts.scheduler_type}")
+    print(f"Warmup Epochs:     {opts.warmup_epochs}")
     print(f"Epochs:            {opts.epochs}")
     print(f"Batch Size:        {opts.batch_size}")
     print(f"Weather Simulation: {getattr(opts, 'use_weather', False)}")
@@ -555,26 +575,89 @@ def main():
         # Using full learning rate with Weighted CE Loss
         print(f"Stage 1 Learning Rate: {opts.lr:.2e}")
         
-        optimizer = torch.optim.SGD(
-            params=trainable_params_stage1, 
-            lr=opts.lr,
-            momentum=0.9, 
-            weight_decay=opts.weight_decay
-        )
+        # Optimizer selection for Stage 1
+        if opts.optimizer == 'sgd':
+            optimizer = torch.optim.SGD(
+                params=trainable_params_stage1, 
+                lr=opts.lr,
+                momentum=0.9, 
+                weight_decay=opts.weight_decay
+            )
+        elif opts.optimizer == 'sgd_nesterov':
+            optimizer = torch.optim.SGD(
+                params=trainable_params_stage1, 
+                lr=opts.lr,
+                momentum=0.9, 
+                weight_decay=opts.weight_decay,
+                nesterov=True
+            )
+        elif opts.optimizer == 'adamw':
+            optimizer = torch.optim.AdamW(
+                params=trainable_params_stage1,
+                lr=opts.lr * 0.1,  # Adam 계열은 LR을 낮춤
+                weight_decay=opts.weight_decay,
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
+        elif opts.optimizer == 'radam':
+            optimizer = torch.optim.RAdam(
+                params=trainable_params_stage1,
+                lr=opts.lr * 0.1,
+                weight_decay=opts.weight_decay,
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
     else:
         # Train entire network from the beginning
         print("--- TRAINING ENTIRE NETWORK: No backbone freezing ---")
         print(f"Learning Rate: {opts.lr:.2e}")
         
-        optimizer = torch.optim.SGD(
-            params=model.parameters(), 
-            lr=opts.lr,
-            momentum=0.9, 
-            weight_decay=opts.weight_decay
-        )
+        # Optimizer selection for full network training
+        if opts.optimizer == 'sgd':
+            optimizer = torch.optim.SGD(
+                params=model.parameters(), 
+                lr=opts.lr,
+                momentum=0.9, 
+                weight_decay=opts.weight_decay
+            )
+        elif opts.optimizer == 'sgd_nesterov':
+            optimizer = torch.optim.SGD(
+                params=model.parameters(), 
+                lr=opts.lr,
+                momentum=0.9, 
+                weight_decay=opts.weight_decay,
+                nesterov=True
+            )
+        elif opts.optimizer == 'adamw':
+            optimizer = torch.optim.AdamW(
+                params=model.parameters(),
+                lr=opts.lr * 0.1,  # Adam 계열은 LR을 낮춤
+                weight_decay=opts.weight_decay,
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
+        elif opts.optimizer == 'radam':
+            optimizer = torch.optim.RAdam(
+                params=model.parameters(),
+                lr=opts.lr * 0.1,
+                weight_decay=opts.weight_decay,
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
 
-    # Setup scheduler based on scheduler_type
-    if opts.scheduler_type == 'reduce':
+    # Setup scheduler based on scheduler_type and warmup
+    if opts.warmup_epochs > 0:
+        # Warmup scheduler
+        warmup_start_lr = opts.warmup_start_lr if opts.warmup_start_lr is not None else 0.1
+        scheduler = get_warmup_scheduler(
+            optimizer, 
+            opts.epochs, 
+            opts.warmup_epochs, 
+            warmup_start_lr,
+            opts.warmup_scheduler
+        )
+        print(f"🔥 Warmup Scheduler: {opts.warmup_epochs} epochs, start_lr={warmup_start_lr:.2e}, type={opts.warmup_scheduler}")
+    elif opts.scheduler_type == 'reduce':
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-8
         )
@@ -1159,9 +1242,9 @@ def main():
 if __name__ == "__main__":
     main()
 
-# python full_train_with_basic_augment.py \
+# python train_albumentations_augmentation.py \
 #     --data_root ./datasets/data \
-#     --ckpt checkpoints/basic_augment_train/sweep_lr2.00e-05_weight6.5_best_model.pth \
+#     --ckpt sweep_CE_best_model.pth \
 #     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --experiment_name "Continue_Training_with_lower_LR_Basic_Augmentation" \
 #     --epochs 200 \
@@ -1181,4 +1264,118 @@ if __name__ == "__main__":
 #     --early_stop_patience 3 \
 #     --early_stop_min_delta 0.001 \
 #     --early_stop_metric "Mean IoU" \
+#     --subset_ratio 1.0
+
+# 기본 증강 최종 훈련
+# python train_albumentations_augmentation.py \
+#     --data_root ./datasets/data \
+#     --ckpt csweep_CE_best_model.pth \
+#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
+#     --experiment_name "PC1_Final_Basic_Augmentation" \
+#     --epochs 200 \
+#     --batch_size 4 \
+#     --val_batch_size 4 \
+#     --lr 5e-5 \
+#     --weight_decay 5e-6 \
+#     --target_max_ratio 6.5 \
+#     --optimizer sgd_nesterov \
+#     --warmup_epochs 5 \
+#     --warmup_start_lr 5e-6 \
+#     --warmup_scheduler linear \
+#     --crop_size 1024 \
+#     --enable_vis \
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_name "PC1_Basic_Aug_SGD_Nesterov_Warmup" \
+#     --wandb_notes "PC1: Basic augmentation with SGD+Nesterov and 5-epoch warmup" \
+#     --wandb_tags "final_training,pc1,basic_aug,sgd_nesterov,warmup" \
+#     --early_stop False \
+#     --horizontal_flip_p 0.5 \
+#     --brightness_limit 0.2 \
+#     --contrast_limit 0.3 \
+#     --rotation_limit 7 \
+#     --use_weather False \
+#     --use_noise False \
+#     --use_blur False \
+#     --use_cutout False \
+#     --use_geometric False \
+#     --use_color False \
+#     --subset_ratio 1.0
+
+# 기본 + 고급 증강 최종 훈련
+# python train_albumentations_augmentation.py \
+#     --data_root ./datasets/data \
+#     --ckpt sweep_CE_best_model.pth \
+#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
+#     --experiment_name "PC2_Final_Advanced_Augmentation" \
+#     --epochs 200 \
+#     --batch_size 4 \
+#     --val_batch_size 4 \
+#     --lr 1e-4 \
+#     --weight_decay 1e-6 \
+#     --target_max_ratio 6.5 \
+#     --optimizer adamw \
+#     --warmup_epochs 8 \
+#     --warmup_start_lr 1e-5 \
+#     --warmup_scheduler cosine \
+#     --crop_size 1024 \
+#     --enable_vis \
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_name "PC2_Advanced_Aug_AdamW_Warmup" \
+#     --wandb_notes "PC2: Basic + Advanced augmentation with AdamW and 8-epoch cosine warmup" \
+#     --wandb_tags "final_training,pc2,advanced_aug,adamw,warmup,all_augmentations" \
+#     --early_stop False \
+#     --horizontal_flip_p 0.5 \
+#     --brightness_limit 0.2 \
+#     --contrast_limit 0.3 \
+#     --rotation_limit 7 \
+#     --use_weather True \
+#     --weather_p 0.25 \
+#     --use_noise True \
+#     --noise_p 0.3 \
+#     --use_blur True \
+#     --blur_p 0.35 \
+#     --use_cutout True \
+#     --cutout_p 0.2 \
+#     --use_geometric True \
+#     --geometric_p 0.4 \
+#     --use_color True \
+#     --color_p 0.32 \
+#     --subset_ratio 1.0
+
+# 하이브리드
+# python train_albumentations_augmentation.py \
+#     --data_root ./datasets/data \
+#     --ckpt sweep_CE_best_model.pth \
+#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
+#     --experiment_name "PC3_Final_Hybrid_Augmentation" \
+#     --epochs 200 \
+#     --batch_size 4 \
+#     --val_batch_size 4 \
+#     --lr 5e-5 \
+#     --weight_decay 1e-6 \
+#     --target_max_ratio 6.5 \
+#     --optimizer sgd_nesterov \
+#     --warmup_epochs 6 \
+#     --warmup_start_lr 5e-6 \
+#     --warmup_scheduler linear \
+#     --crop_size 1024 \
+#     --enable_vis \
+#     --wandb_project "deeplabv3-segmentation" \
+#     --wandb_name "PC3_Hybrid_Aug_SGD_Nesterov_Warmup" \
+#     --wandb_notes "PC3: Hybrid augmentation (Basic + Weather/Blur/Color) with SGD+Nesterov and 6-epoch warmup" \
+#     --wandb_tags "final_training,pc3,hybrid_aug,sgd_nesterov,warmup,selective_advanced" \
+#     --early_stop False \
+#     --horizontal_flip_p 0.5 \
+#     --brightness_limit 0.2 \
+#     --contrast_limit 0.3 \
+#     --rotation_limit 7 \
+#     --use_weather True \
+#     --weather_p 0.25 \
+#     --use_noise False \
+#     --use_blur True \
+#     --blur_p 0.35 \
+#     --use_cutout False \
+#     --use_geometric False \
+#     --use_color True \
+#     --color_p 0.32 \
 #     --subset_ratio 1.0
