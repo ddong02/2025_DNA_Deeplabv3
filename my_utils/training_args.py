@@ -122,5 +122,15 @@ def get_argparser():
     # Backbone freezing 관련 인자
     parser.add_argument("--freeze_backbone", action='store_true', default=False,
                         help="Freeze backbone parameters during training (default: False)")
+    
+    # 증강 강도 파라미터들 (WandB Sweep용)
+    parser.add_argument("--horizontal_flip_p", type=float, default=0.5,
+                        help="Probability of horizontal flip (0.0-1.0, default: 0.5)")
+    parser.add_argument("--brightness_limit", type=float, default=0.2,
+                        help="Brightness adjustment limit (0.0-1.0, default: 0.2)")
+    parser.add_argument("--contrast_limit", type=float, default=0.2,
+                        help="Contrast adjustment limit (0.0-1.0, default: 0.2)")
+    parser.add_argument("--rotation_limit", type=int, default=10,
+                        help="Rotation angle limit in degrees (0-180, default: 10)")
 
     return parser

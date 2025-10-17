@@ -18,9 +18,15 @@ import torchvision.transforms.functional as F
 
 class ExtSegmentationTransform:
     """Transform for training: random scale, crop, brightness/contrast, rotation, flip, normalize"""
-    def __init__(self, crop_size=[1024, 1024], scale_range=[0.5, 1.5]):
+    def __init__(self, crop_size=[1024, 1024], scale_range=[0.5, 1.5], 
+                 horizontal_flip_p=0.5, brightness_limit=0.2, contrast_limit=0.2, 
+                 rotation_limit=10):
         self.crop_size = crop_size
         self.scale_range = scale_range
+        self.horizontal_flip_p = horizontal_flip_p
+        self.brightness_limit = brightness_limit
+        self.contrast_limit = contrast_limit
+        self.rotation_limit = rotation_limit
         self.mean = [0.485, 0.456, 0.406]
         self.std = [0.229, 0.224, 0.225]
         
@@ -55,20 +61,20 @@ class ExtSegmentationTransform:
         
         # NEW: Brightness & Contrast augmentation (only for image)
         if random.random() > 0.5:
-            brightness_factor = random.uniform(0.8, 1.2)
-            contrast_factor = random.uniform(0.8, 1.2)
+            brightness_factor = random.uniform(1-self.brightness_limit, 1+self.brightness_limit)
+            contrast_factor = random.uniform(1-self.contrast_limit, 1+self.contrast_limit)
             image = F.adjust_brightness(image, brightness_factor)
             image = F.adjust_contrast(image, contrast_factor)
             # Note: label is not affected by brightness/contrast changes
         
         # NEW: Small rotation (both image and label)
         if random.random() > 0.5:
-            angle = random.uniform(-10, 10)  # ±10도 회전
+            angle = random.uniform(-self.rotation_limit, self.rotation_limit)
             image = F.rotate(image, angle, fill=0)  # Black fill for image
             label = F.rotate(label, angle, fill=255)  # Ignore index for label
         
         # Random horizontal flip
-        if random.random() > 0.5:
+        if random.random() < self.horizontal_flip_p:
             image = F.hflip(image)
             label = F.hflip(label)
         
@@ -135,7 +141,8 @@ class DNA2025Dataset(Dataset):
         [128, 128, 128],  # 18: Other
     ], dtype=np.uint8)
     
-    def __init__(self, root_dir, crop_size, subset, scale_range=None, random_seed=1, subset_ratio=1.0):
+    def __init__(self, root_dir, crop_size, subset, scale_range=None, random_seed=1, subset_ratio=1.0,
+                 horizontal_flip_p=0.5, brightness_limit=0.2, contrast_limit=0.2, rotation_limit=10):
         """
         Args:
             root_dir: Root directory of the dataset
@@ -214,7 +221,10 @@ class DNA2025Dataset(Dataset):
         
         # Set transforms
         if subset == 'train' and scale_range is not None:
-            self.transform = ExtSegmentationTransform(crop_size, scale_range)
+            self.transform = ExtSegmentationTransform(
+                crop_size, scale_range, 
+                horizontal_flip_p, brightness_limit, contrast_limit, rotation_limit
+            )
         else:
             self.transform = ExtValidationTransform(crop_size)
         

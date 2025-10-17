@@ -1,0 +1,91 @@
+# Sweep augmentation intensity parameters with optimized hyperparameters
+# 증강 강도 파라미터를 Sweep으로 최적화
+
+program: train_augmentation_intensity.py
+method: bayes  # Bayesian optimization으로 효율적 탐색
+project: "deeplabv3-segmentation"
+name: "Augmentation Intensity Optimization Sweep"
+
+metric:
+  goal: maximize
+  name: "[Val] Mean IoU"
+
+# Hyperband를 사용한 조기 종료 (코드의 early stopping과 충돌 방지)
+early_terminate:
+  type: hyperband
+  min_iter: 20  # 최소 20 에폭은 실행 후 성능 기반으로 중단
+
+parameters:
+  # 증강 강도 파라미터들
+  horizontal_flip_p:
+    values: [0.3, 0.5, 0.7, 0.9]
+    
+  brightness_limit:
+    distribution: uniform
+    min: 0.0
+    max: 0.4
+    
+  contrast_limit:
+    distribution: uniform
+    min: 0.0
+    max: 0.4
+    
+  rotation_limit:
+    distribution: int_uniform
+    min: 0
+    max: 20
+    
+  # 학습률도 함께 최적화
+  lr:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+    
+  weight_decay:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-3
+    
+  # 고정값
+  epochs:
+    value: 30
+  batch_size:
+    value: 4
+  val_batch_size:
+    value: 4
+  crop_size:
+    value: 1024
+  
+  # Dataset and model settings
+  data_root:
+    value: "./datasets/data"
+  ckpt:
+    value: "checkpoints/weighted_ce_sweep_optim/sweep_CE_best_model.pth"
+  class_weights_file:
+    value: "class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth"
+  
+  # Experiment settings
+  experiment_name:
+    value: "augmentation_intensity_sweep"
+  
+  # WandB settings
+  wandb_project:
+    value: "deeplabv3-segmentation"
+  wandb_name:
+    value: "Augmentation Intensity Sweep"
+  wandb_notes:
+    value: "Sweep augmentation intensity parameters: flip_p, brightness, contrast, rotation"
+  wandb_tags:
+    value: "augmentation_intensity,sweep,bayesian_optimization"
+  
+  # Training flags (Hyperband 사용으로 early stopping 비활성화)
+  early_stop_patience:
+    value: 100  # 매우 큰 값으로 설정하여 사실상 비활성화
+  early_stop_min_delta:
+    value: 0.001
+  early_stop_metric:
+    value: "Mean IoU"
+  
+  # Use subset for faster experimentation
+  subset_ratio:
+    value: 0.3
