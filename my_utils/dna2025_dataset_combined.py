@@ -77,6 +77,10 @@ class DNA2025CombinedDataset(Dataset):
         self.color_palette = self.COLOR_PALETTE
         self.combine_train_val = combine_train_val
         
+        # Initialize sample counters
+        self.train_samples = 0
+        self.val_samples = 0
+        
         # Only set seed for subset sampling, not for augmentation
         if subset_ratio < 1.0:
             np.random.seed(random_seed)
@@ -89,12 +93,27 @@ class DNA2025CombinedDataset(Dataset):
                        'set1', 'set2', 'set3']
         
         print(f"\nLoading {subset} data...")
+        print(f"📁 Data root: {root_dir}")
+        print(f"📁 Base directory: {base_dir}")
+        print(f"📁 Base directory exists: {os.path.exists(base_dir)}")
+        
+        if not os.path.exists(base_dir):
+            print(f"❌ Base directory not found: {base_dir}")
+            print(f"   Please check if the dataset is properly extracted.")
+            raise FileNotFoundError(f"Dataset directory not found: {base_dir}")
         
         if combine_train_val and subset == 'train':
             # Load both train and val data for training
             print("🔄 Combining train and validation datasets for full training...")
             
             for split_dir in ['train', 'val']:
+                split_dir_path = os.path.join(base_dir, "image", split_dir)
+                if not os.path.exists(split_dir_path):
+                    print(f"  ⚠️ {split_dir} directory not found, skipping...")
+                    if split_dir == 'val':
+                        self.val_samples = 0
+                    continue
+                
                 print(f"  Loading from '{split_dir}' directory...")
                 split_count = 0
                 
@@ -103,8 +122,10 @@ class DNA2025CombinedDataset(Dataset):
                     cam_images = sorted(glob(image_pattern))
                     
                     if len(cam_images) == 0:
+                        print(f"    {cam}: No images found (pattern: {image_pattern})")
                         continue
                     
+                    valid_pairs = 0
                     for img_path in cam_images:
                         label_path = self._get_label_path(img_path, base_dir, split_dir)
                         
@@ -112,10 +133,17 @@ class DNA2025CombinedDataset(Dataset):
                             self.image_paths.append(img_path)
                             self.label_paths.append(label_path)
                             split_count += 1
+                            valid_pairs += 1
                     
-                    print(f"    {cam}: {len(cam_images)} images loaded")
+                    print(f"    {cam}: {len(cam_images)} images found, {valid_pairs} valid pairs")
                 
                 print(f"  Total from {split_dir}: {split_count} images")
+                
+                # Count samples for each split
+                if split_dir == 'train':
+                    self.train_samples = split_count
+                elif split_dir == 'val':
+                    self.val_samples = split_count
         else:
             # Normal loading (train/val/test split)
             if subset == 'train':
@@ -134,27 +162,31 @@ class DNA2025CombinedDataset(Dataset):
                 cam_images = sorted(glob(image_pattern))
                 
                 if len(cam_images) == 0:
+                    print(f"  {cam}: No images found (pattern: {image_pattern})")
                     continue
                 
+                valid_pairs = 0
                 for img_path in cam_images:
                     label_path = self._get_label_path(img_path, base_dir, split_dir)
                     
                     if os.path.exists(label_path):
                         self.image_paths.append(img_path)
                         self.label_paths.append(label_path)
+                        valid_pairs += 1
                 
-                print(f"  {cam}: {len(cam_images)} images loaded")
+                print(f"  {cam}: {len(cam_images)} images found, {valid_pairs} valid pairs")
         
         # Apply subset ratio if specified
         if subset_ratio < 1.0:
             original_count = len(self.image_paths)
             subset_size = int(len(self.image_paths) * subset_ratio)
-            subset_size = max(1, subset_size)  # Ensure at least 1 sample
+            subset_size = max(1, min(subset_size, len(self.image_paths)))  # Ensure valid range
             
-            # Randomly sample subset
-            indices = np.random.choice(len(self.image_paths), subset_size, replace=False)
-            self.image_paths = [self.image_paths[i] for i in indices]
-            self.label_paths = [self.label_paths[i] for i in indices]
+            if subset_size < len(self.image_paths):
+                # Randomly sample subset
+                indices = np.random.choice(len(self.image_paths), subset_size, replace=False)
+                self.image_paths = [self.image_paths[i] for i in indices]
+                self.label_paths = [self.label_paths[i] for i in indices]
             
             print(f"Applied subset ratio {subset_ratio:.1%}: {original_count} → {len(self.image_paths)} images")
         
@@ -162,7 +194,7 @@ class DNA2025CombinedDataset(Dataset):
         assert len(self.image_paths) == len(self.label_paths), \
             f"Image/label count mismatch: {len(self.image_paths)} vs {len(self.label_paths)}"
         assert len(self.image_paths) > 0, \
-            f"No images found for {subset} subset"
+            f"No images found for {subset} subset. Check data path: {base_dir}"
         
         print(f"✅ Total {subset} images loaded: {len(self.image_paths)}")
         
@@ -191,11 +223,20 @@ class DNA2025CombinedDataset(Dataset):
         # Extract relative path from image path
         rel_path = os.path.relpath(image_path, os.path.join(base_dir, "image", split_dir))
         
-        # Replace image extension with label extension
-        label_rel_path = os.path.splitext(rel_path)[0] + '.png'
+        # Handle different naming patterns
+        if "_leftImg8bit" in rel_path:
+            # For set1-3: Daeduk_000000_leftImg8bit.png -> Daeduk_000000_gtFine_CategoryId.png
+            label_rel_path = rel_path.replace("_leftImg8bit", "_gtFine_CategoryId")
+        else:
+            # For cam0-5: round(...)_1662009789000096850.jpg -> round(...)_1662009789000096850_CategoryId.png
+            label_rel_path = os.path.splitext(rel_path)[0] + '_CategoryId.png'
         
         # Construct label path
-        label_path = os.path.join(base_dir, "label", split_dir, label_rel_path)
+        label_path = os.path.join(base_dir, "labelmap", split_dir, label_rel_path)
+        
+        # Debug: print path matching
+        if len(self.image_paths) < 3:  # Only print for first few samples
+            print(f"    🔍 Debug: {os.path.basename(image_path)} -> {os.path.basename(label_path)} (exists: {os.path.exists(label_path)})")
         
         return label_path
     

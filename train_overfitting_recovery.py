@@ -126,7 +126,7 @@ def run_recovery_training(args):
             "--ckpt", current_checkpoint,
             "--class_weights_file", class_weights_file,
             "--experiment_name", f"{args.experiment_name}_recovery_stage{stage}",
-            "--use_combined_dataset", "True",  # Use combined train+val dataset
+            "--use_combined_dataset",  # Use combined train+val dataset
             "--subset_ratio", str(ratio),
             "--epochs", str(epochs),
             "--lr", str(lr),
@@ -139,11 +139,9 @@ def run_recovery_training(args):
             "--warmup_start_lr", str(lr * 0.1),
             "--warmup_scheduler", args.warmup_scheduler,
             "--crop_size", str(args.crop_size),
-            "--enable_vis",
             "--wandb_project", args.wandb_project,
             "--wandb_name", f"{args.wandb_name}_recovery_stage{stage}",
             "--wandb_notes", f"Overfitting Recovery Stage {stage}: {ratio:.1%} data, {epochs} epochs, LR {lr:.2e}",
-            "--wandb_tags", f"overfitting_recovery,stage{stage},ratio{ratio:.0%},combined_dataset",
             "--early_stop", "True",
             "--early_stop_patience", str(args.early_stop_patience)
         ]
@@ -176,14 +174,20 @@ def run_recovery_training(args):
         
         # Add WandB visualization parameters
         cmd.extend([
-            "--enable_vis", "True",
-            "--vis_num_samples", "2",  # Reduced for lower overhead
-            "--wandb_notes", f"Overfitting Recovery Stage {stage}: {ratio:.1%} data, {epochs} epochs, LR {lr:.2e}"
+            "--enable_vis",
+            "--vis_num_samples", "2"  # Reduced for lower overhead
         ])
         
         # Add recovery-specific WandB parameters
+        base_tags = f"overfitting_recovery,stage{stage},ratio{ratio:.0%},combined_dataset,visual_monitoring"
+        if args.wandb_tags:
+            user_tags = args.wandb_tags.replace(" ", "").replace("'", "").replace('"', "")
+            combined_tags = f"{base_tags},{user_tags}"
+        else:
+            combined_tags = base_tags
+        
         cmd.extend([
-            "--wandb_tags", f"overfitting_recovery,stage{stage},ratio{ratio:.0%},combined_dataset,visual_monitoring"
+            "--wandb_tags", combined_tags
         ])
         
         # Add basic augmentation parameters
@@ -293,6 +297,8 @@ def main():
                         help="WandB project name")
     parser.add_argument("--wandb_name", type=str, default=None,
                         help="WandB run name (default: auto-generated)")
+    parser.add_argument("--wandb_tags", type=str, default="",
+                        help="Comma-separated WandB tags")
     
     # Early stopping (more aggressive for overfitting recovery)
     parser.add_argument("--early_stop", type=bool, default=True,
@@ -358,7 +364,7 @@ if __name__ == "__main__":
 
 # PC Main: Conservative Strategy (Safe & Slow)
 python train_overfitting_recovery.py \
-    --data_root ./datasets/data \
+    --data_root /mnt/c/Users/user/Desktop/eogus/dataset/2025dna \
     --checkpoint pc_main_best_model.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "PC_main_Conservative_Recovery" \
@@ -374,12 +380,11 @@ python train_overfitting_recovery.py \
     --batch_size 4 \
     --early_stop_patience 12 \
     --wandb_project "deeplabv3-segmentation" \
-    --wandb_name "PC_main_Conservative_Recovery" \
-    --wandb_tags "conservative,slow_recovery,sgd_nesterov,pc_main"
+    --wandb_name "PC_main_Conservative_Recovery"
 
 # PC airlab: Balanced Strategy (Recommended)
 python train_overfitting_recovery.py \
-    --data_root ./datasets/data \
+    --data_root /home/linux/deeplabv3/Deeplabv3/datasets/data \
     --checkpoint pc_airlab_best_model.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "PC_airlab_Balanced_Recovery" \
@@ -395,12 +400,11 @@ python train_overfitting_recovery.py \
     --batch_size 4 \
     --early_stop_patience 10 \
     --wandb_project "deeplabv3-segmentation" \
-    --wandb_name "PC_airlab_Balanced_Recovery" \
-    --wandb_tags "balanced,moderate_recovery,sgd_nesterov,pc_airlab"
+    --wandb_name "PC_airlab_Balanced_Recovery"
 
 # PC 1: Aggressive Strategy (Fast & Risky)
 python train_overfitting_recovery.py \
-    --data_root ./datasets/data \
+    --data_root /home/linux/deeplabv3_ws/DeepLabV3Plus-Pytorch/datasets/data \
     --checkpoint pc_1_best_model.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "PC_1_Aggressive_Recovery" \
@@ -416,8 +420,7 @@ python train_overfitting_recovery.py \
     --batch_size 2 \
     --early_stop_patience 8 \
     --wandb_project "deeplabv3-segmentation" \
-    --wandb_name "PC_1_Aggressive_Recovery" \
-    --wandb_tags "aggressive,fast_recovery,adamw,pc1"
+    --wandb_name "PC_1_Aggressive_Recovery"
 
 # ============================================================================
 # SINGLE PC TESTING COMMANDS
@@ -425,7 +428,7 @@ python train_overfitting_recovery.py \
 
 # Basic usage with existing class weights:
 python train_overfitting_recovery.py \
-    --data_root ./datasets/data \
+    --data_root /home/linux/deeplabv3_ws/DeepLabV3Plus-Pytorch/datasets/data \
     --checkpoint overfitted_model.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "Overfitting_Recovery" \
@@ -435,7 +438,7 @@ python train_overfitting_recovery.py \
 
 # Advanced usage with custom parameters:
 python train_overfitting_recovery.py \
-    --data_root ./datasets/data \
+    --data_root /home/linux/deeplabv3_ws/DeepLabV3Plus-Pytorch/datasets/data \
     --checkpoint overfitted_model.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "Advanced_Recovery" \
@@ -452,7 +455,7 @@ python train_overfitting_recovery.py \
 
 # Using existing class weights (recommended):
 python train_overfitting_recovery.py \
-    --data_root ./datasets/data \
+    --data_root /home/linux/deeplabv3_ws/DeepLabV3Plus-Pytorch/datasets/data \
     --checkpoint overfitted_model.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "Existing_Weights" \
@@ -464,7 +467,7 @@ python train_overfitting_recovery.py \
 # PC Main
 
 # python train_overfitting_recovery.py \
-#     --data_root ./datasets/data \
+#     --data_root /home/linux/deeplabv3_ws/DeepLabV3Plus-Pytorch/datasets/data \
 #     --checkpoint pc_main_best_model.pth \
 #     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --experiment_name "PC_main_Conservative_Recovery" \
@@ -486,7 +489,7 @@ python train_overfitting_recovery.py \
 # PC airlab
 
 # python train_overfitting_recovery.py \
-#     --data_root ./datasets/data \
+#     --data_root /home/linux/deeplabv3_ws/DeepLabV3Plus-Pytorch/datasets/data \
 #     --checkpoint pc3_best_model.pth \
 #     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
 #     --experiment_name "PC3_Recovery_AdamW" \

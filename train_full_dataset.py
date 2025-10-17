@@ -117,6 +117,10 @@ def get_dataset(opts):
             # Albumentations Transform 사용
             custom_transform=train_transform
         )
+        print(f"📊 Combined dataset loaded: {len(train_dst)} samples")
+        print(f"   - Train samples: {train_dst.train_samples}")
+        print(f"   - Val samples: {train_dst.val_samples}")
+        print(f"   - Subset ratio: {getattr(opts, 'subset_ratio', 1.0):.1%}")
     else:
         train_dst = DNA2025Dataset(
             root_dir=opts.data_root,
@@ -128,22 +132,43 @@ def get_dataset(opts):
             # Albumentations Transform 사용
             custom_transform=train_transform
         )
+        print(f"📊 Training dataset loaded: {len(train_dst)} samples")
+        print(f"   - Subset ratio: {getattr(opts, 'subset_ratio', 1.0):.1%}")
     
     # Validation Transform 생성 (증강 없음)
     val_transform = AlbumentationsValidationTransform(
         crop_size=[opts.crop_size, opts.crop_size]
     )
     
-    val_dst = DNA2025Dataset(
-        root_dir=opts.data_root,
-        crop_size=[opts.crop_size, opts.crop_size],
-        subset='val',
-        scale_range=None,
-        random_seed=opts.random_seed,
-        subset_ratio=1.0,  # Validation은 항상 전체 데이터 사용
-        # Albumentations Validation Transform 사용
-        custom_transform=val_transform
-    )
+    # Check if val directory exists
+    val_dir = os.path.join(opts.data_root, "SemanticDataset_final", "image", "val")
+    if os.path.exists(val_dir):
+        print("📊 Loading validation dataset...")
+        val_dst = DNA2025Dataset(
+            root_dir=opts.data_root,
+            crop_size=[opts.crop_size, opts.crop_size],
+            subset='val',
+            scale_range=None,
+            random_seed=opts.random_seed,
+            subset_ratio=1.0,  # Validation은 항상 전체 데이터 사용
+            # Albumentations Validation Transform 사용
+            custom_transform=val_transform
+        )
+        print(f"📊 Validation dataset loaded: {len(val_dst)} samples")
+    else:
+        print("⚠️ Validation directory not found, using train subset for validation...")
+        # Use a small subset of train data for validation
+        val_dst = DNA2025Dataset(
+            root_dir=opts.data_root,
+            crop_size=[opts.crop_size, opts.crop_size],
+            subset='train',
+            scale_range=None,
+            random_seed=opts.random_seed,
+            subset_ratio=0.1,  # Use 10% of train data for validation
+            # Albumentations Validation Transform 사용
+            custom_transform=val_transform
+        )
+        print(f"📊 Validation dataset (from train subset): {len(val_dst)} samples")
 
     return train_dst, val_dst
 

@@ -186,6 +186,16 @@ class DNA2025Dataset(Dataset):
         else:
             raise ValueError(f"Unknown subset: {subset}. Use 'train', 'val', or 'test'")
         
+        # Check if the split directory exists
+        split_dir_path = os.path.join(base_dir, "image", split_dir)
+        if not os.path.exists(split_dir_path):
+            if subset == 'val':
+                print(f"⚠️ Validation directory not found: {split_dir_path}")
+                print(f"   Using train subset for validation...")
+                split_dir = 'train'  # Fallback to train directory
+            else:
+                raise FileNotFoundError(f"Directory not found: {split_dir_path}")
+        
         print(f"\nLoading {subset} data from '{split_dir}' directory...")
         
         # Load image and label paths
