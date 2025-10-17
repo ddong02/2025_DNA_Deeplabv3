@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 # ===== Import separated modules =====
 from my_utils.training_args import get_argparser
 from my_utils.dna2025_dataset import DNA2025Dataset
+from my_utils.dna2025_dataset_combined import DNA2025CombinedDataset
 from my_utils.validation import validate
 from my_utils.checkpoint import save_checkpoint, load_pretrained_model, load_checkpoint
 from my_utils.early_stopping import EarlyStopping
@@ -100,16 +101,33 @@ def get_dataset(opts):
         color_p=color_p
     )
     
-    train_dst = DNA2025Dataset(
-        root_dir=opts.data_root,
-        crop_size=[opts.crop_size, opts.crop_size],
-        subset='train',
-        scale_range=[0.75, 1.25],
-        random_seed=opts.random_seed,
-        subset_ratio=getattr(opts, 'subset_ratio', 1.0),
-        # Albumentations Transform 사용
-        custom_transform=train_transform
-    )
+    # Check if we should use combined dataset
+    use_combined_dataset = getattr(opts, 'use_combined_dataset', False)
+    
+    if use_combined_dataset:
+        print("🔄 Using combined train+val dataset for training...")
+        train_dst = DNA2025CombinedDataset(
+            root_dir=opts.data_root,
+            crop_size=[opts.crop_size, opts.crop_size],
+            subset='train',
+            scale_range=[0.75, 1.25],
+            random_seed=opts.random_seed,
+            subset_ratio=getattr(opts, 'subset_ratio', 1.0),
+            combine_train_val=True,  # Combine train and val data
+            # Albumentations Transform 사용
+            custom_transform=train_transform
+        )
+    else:
+        train_dst = DNA2025Dataset(
+            root_dir=opts.data_root,
+            crop_size=[opts.crop_size, opts.crop_size],
+            subset='train',
+            scale_range=[0.75, 1.25],
+            random_seed=opts.random_seed,
+            subset_ratio=getattr(opts, 'subset_ratio', 1.0),
+            # Albumentations Transform 사용
+            custom_transform=train_transform
+        )
     
     # Validation Transform 생성 (증강 없음)
     val_transform = AlbumentationsValidationTransform(
@@ -229,8 +247,86 @@ def get_augmented_training_samples(train_loader, num_samples=2, device='cuda'):
     return samples
 
 
+def progressive_training(opts):
+    """Progressive training with increasing dataset ratios"""
+    import ast
+    
+    # Parse progressive training parameters
+    ratios = [float(x.strip()) for x in opts.progressive_ratios.split(',')]
+    epochs_list = [int(x.strip()) for x in opts.progressive_epochs.split(',')]
+    lrs = [float(x.strip()) for x in opts.progressive_lrs.split(',')]
+    
+    if len(ratios) != len(epochs_list) or len(ratios) != len(lrs):
+        raise ValueError("progressive_ratios, progressive_epochs, and progressive_lrs must have the same length")
+    
+    print(f"\n{'='*80}")
+    print(f"🚀 PROGRESSIVE TRAINING STARTED")
+    print(f"{'='*80}")
+    print(f"Stages: {len(ratios)}")
+    print(f"Ratios: {ratios}")
+    print(f"Epochs: {epochs_list}")
+    print(f"Learning Rates: {lrs}")
+    print(f"{'='*80}\n")
+    
+    current_checkpoint = opts.ckpt
+    
+    for stage, (ratio, epochs, lr) in enumerate(zip(ratios, epochs_list, lrs), 1):
+        print(f"\n{'='*60}")
+        print(f"🎯 STAGE {stage}/{len(ratios)}: Ratio={ratio:.1%}, Epochs={epochs}, LR={lr:.2e}")
+        print(f"{'='*60}")
+        
+        # Update options for current stage
+        stage_opts = opts
+        stage_opts.subset_ratio = ratio
+        stage_opts.epochs = epochs
+        stage_opts.lr = lr
+        stage_opts.ckpt = current_checkpoint
+        stage_opts.experiment_name = f"{opts.experiment_name}_stage{stage}_ratio{ratio:.1%}"
+        stage_opts.wandb_name = f"{opts.wandb_name}_stage{stage}_ratio{ratio:.1%}"
+        
+        # Run training for current stage
+        print(f"Starting Stage {stage} training...")
+        print(f"  Dataset ratio: {ratio:.1%}")
+        print(f"  Epochs: {epochs}")
+        print(f"  Learning rate: {lr:.2e}")
+        print(f"  Checkpoint: {current_checkpoint}")
+        
+        # Call main training function with stage options
+        main_training(stage_opts)
+        
+        # Find the best checkpoint from this stage
+        experiment_dir = f"checkpoints/{stage_opts.experiment_name}"
+        if os.path.exists(experiment_dir):
+            checkpoint_files = [f for f in os.listdir(experiment_dir) if f.endswith('_best_model.pth')]
+            if checkpoint_files:
+                current_checkpoint = os.path.join(experiment_dir, checkpoint_files[0])
+                print(f"✓ Stage {stage} completed. Best checkpoint: {current_checkpoint}")
+            else:
+                print(f"⚠️ No best model found for stage {stage}")
+        else:
+            print(f"⚠️ Experiment directory not found: {experiment_dir}")
+    
+    print(f"\n{'='*80}")
+    print(f"🎉 PROGRESSIVE TRAINING COMPLETED")
+    print(f"{'='*80}")
+    print(f"Final checkpoint: {current_checkpoint}")
+    print(f"{'='*80}\n")
+
+
 def main():
     opts = get_argparser().parse_args()
+    
+    # Check if progressive training is enabled
+    if opts.progressive_training:
+        progressive_training(opts)
+        return
+    
+    # Regular training
+    main_training(opts)
+
+
+def main_training(opts):
+    """Main training function (extracted from original main function)"""
 
     # ===== DEBUG: WandB Status Check =====
     print("\n" + "="*60)
@@ -1034,7 +1130,7 @@ def main():
                 print(f"[Early Stopping] Waiting for Stage 2 (epoch {opts.unfreeze_epoch}) to start monitoring...")
         # ================================
 
-        # WandB updates (Enhanced monitoring)
+        # WandB updates (Enhanced monitoring with visual validation)
         if vis is not None:
             # Get current learning rate (use first param group for logging)
             current_lr = optimizer.param_groups[0]['lr']
@@ -1047,43 +1143,70 @@ def main():
                     total_norm += param_norm.item() ** 2
             total_norm = total_norm ** 0.5
             
-            # Get augmented training samples for visualization
+            # Enhanced WandB logging with visual validation
             try:
-                # Get 2 augmented samples from training data
+                # Get augmented training samples for visualization (reduced overhead)
                 augmented_samples = get_augmented_training_samples(train_loader, num_samples=2, device=device)
                 
-                # Log all metrics and augmented images in one batch
-                wandb.log({
+                # Create comprehensive logging dictionary
+                log_dict = {
                     'epoch': epoch,
                     'Training Loss': avg_epoch_loss,
                     'Learning Rate': current_lr,
-                    '[Val] Overall Acc': val_score['Overall Acc'],
-                    '[Val] Mean Acc': val_score['Mean Acc'],
-                    '[Val] Mean IoU': val_score['Mean IoU'],
                     'Gradient Norm': total_norm,
                     'Augmented Train Sample 1': wandb.Image(augmented_samples[0], caption=f'Epoch {epoch} - Augmented Sample 1'),
                     'Augmented Train Sample 2': wandb.Image(augmented_samples[1], caption=f'Epoch {epoch} - Augmented Sample 2'),
-                }, step=epoch)
-                print(f"✅ WandB log successful for epoch {epoch} (including augmented samples)")
+                }
+                
+                # Add validation metrics if available
+                if 'val_score' in locals() and val_score is not None:
+                    log_dict.update({
+                        '[Val] Overall Acc': val_score['Overall Acc'],
+                        '[Val] Mean Acc': val_score['Mean Acc'],
+                        '[Val] Mean IoU': val_score['Mean IoU'],
+                    })
+                    
+                    # Log class IoU table
+                    vis.vis_table("[Val] Class IoU", val_score['Class IoU'], step=epoch)
+                    
+                    # Log confusion matrix if available
+                    if 'confusion_mat' in locals() and confusion_mat is not None:
+                        # Create confusion matrix heatmap
+                        import matplotlib.pyplot as plt
+                        fig, ax = plt.subplots(figsize=(10, 8))
+                        im = ax.imshow(confusion_mat, cmap='Blues', interpolation='nearest')
+                        ax.set_title(f'Confusion Matrix - Epoch {epoch}')
+                        ax.set_xlabel('Predicted Label')
+                        ax.set_ylabel('True Label')
+                        plt.colorbar(im, ax=ax)
+                        plt.tight_layout()
+                        
+                        log_dict['Confusion Matrix'] = wandb.Image(fig)
+                        plt.close(fig)
+                else:
+                    # No validation data - focus on training metrics
+                    log_dict.update({
+                        'Training Status': 'No Validation Data',
+                        'Recovery Stage': f'Stage {stage}' if 'stage' in locals() else 'Unknown'
+                    })
+                
+                # Log all metrics in one batch
+                wandb.log(log_dict, step=epoch)
+                print(f"✅ WandB log successful for epoch {epoch} (enhanced monitoring)")
+                
             except Exception as e:
                 print(f"❌ WandB log failed: {e}")
-                # Fallback: log without augmented images
+                # Fallback: minimal logging
                 try:
                     wandb.log({
                         'epoch': epoch,
                         'Training Loss': avg_epoch_loss,
                         'Learning Rate': current_lr,
-                        '[Val] Overall Acc': val_score['Overall Acc'],
-                        '[Val] Mean Acc': val_score['Mean Acc'],
-                        '[Val] Mean IoU': val_score['Mean IoU'],
                         'Gradient Norm': total_norm,
                     }, step=epoch)
                     print(f"✅ WandB fallback log successful for epoch {epoch}")
                 except Exception as e2:
                     print(f"❌ WandB fallback log also failed: {e2}")
-            
-            # Log class IoU table with same step
-            vis.vis_table("[Val] Class IoU", val_score['Class IoU'], step=epoch)
             
             # Log confusion matrix as heatmap
             # Normalize confusion matrix by row (true labels) for better visualization

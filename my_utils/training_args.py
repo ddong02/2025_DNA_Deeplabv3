@@ -101,6 +101,18 @@ def get_argparser():
     parser.add_argument("--subset_ratio", type=float, default=1.0,
                         help="Ratio of dataset to use for training (0.0-1.0, default: 1.0 for full dataset). "
                              "Useful for quick testing (e.g., 0.05 for 5% of data)")
+    parser.add_argument("--use_combined_dataset", action='store_true', default=False,
+                        help="Use combined train+val dataset for training (includes both train and val data)")
+    
+    # Progressive training 관련 인자
+    parser.add_argument("--progressive_training", action='store_true', default=False,
+                        help="Enable progressive training with increasing dataset ratios")
+    parser.add_argument("--progressive_ratios", type=str, default="0.3,0.6,1.0",
+                        help="Comma-separated ratios for progressive training (e.g., '0.3,0.6,1.0')")
+    parser.add_argument("--progressive_epochs", type=str, default="30,30,50",
+                        help="Comma-separated epochs for each progressive stage (e.g., '30,30,50')")
+    parser.add_argument("--progressive_lrs", type=str, default="1e-4,5e-5,1e-5",
+                        help="Comma-separated learning rates for each progressive stage (e.g., '1e-4,5e-5,1e-5')")
     
     # Class weights optimization 관련 인자
     parser.add_argument("--target_max_ratio", type=float, default=6.5,
