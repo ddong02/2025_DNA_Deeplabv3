@@ -1242,30 +1242,6 @@ def main():
 if __name__ == "__main__":
     main()
 
-# python train_albumentations_augmentation.py \
-#     --data_root ./datasets/data \
-#     --ckpt sweep_CE_best_model.pth \
-#     --class_weights_file class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth \
-#     --experiment_name "Continue_Training_with_lower_LR_Basic_Augmentation" \
-#     --epochs 200 \
-#     --batch_size 4 \
-#     --val_batch_size 4 \
-#     --lr 5e-6 \
-#     --weight_decay 5e-4 \
-#     --target_max_ratio 6.5 \
-#     --scheduler_type cosine \
-#     --crop_size 1024 \
-#     --enable_vis \
-#     --wandb_project "deeplabv3-segmentation" \
-#     --wandb_name "Continue Training with lower lr (basic augmentation)" \
-#     --wandb_notes "Training with basic augmentation - reduced LR and cosine scheduler" \
-#     --wandb_tags "lr5e-6,basic_augmentation,weighted_ce,cosine_scheduler,reduced_lr" \
-#     --early_stop \
-#     --early_stop_patience 3 \
-#     --early_stop_min_delta 0.001 \
-#     --early_stop_metric "Mean IoU" \
-#     --subset_ratio 1.0
-
 # 기본 증강 최종 훈련
 # python train_albumentations_augmentation.py \
 #     --data_root ./datasets/data \
@@ -1293,12 +1269,6 @@ if __name__ == "__main__":
 #     --brightness_limit 0.2 \
 #     --contrast_limit 0.3 \
 #     --rotation_limit 7 \
-#     --use_weather False \
-#     --use_noise False \
-#     --use_blur False \
-#     --use_cutout False \
-#     --use_geometric False \
-#     --use_color False \
 #     --subset_ratio 1.0
 
 # 기본 + 고급 증강 최종 훈련
