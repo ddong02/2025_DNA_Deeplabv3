@@ -365,7 +365,7 @@ if __name__ == "__main__":
 # PC Main: Conservative Strategy (Safe & Slow)
 python train_overfitting_recovery.py \
     --data_root /mnt/c/Users/user/Desktop/eogus/dataset/2025dna \
-    --checkpoint pc_main_best_model.pth \
+    --checkpoint checkpoints/sweep_lr5.00e-04_weight6.5_epoch_040_miou_0.5045.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "PC_main_Conservative_Recovery" \
     --recovery_strategy conservative \
@@ -385,7 +385,7 @@ python train_overfitting_recovery.py \
 # PC airlab: Balanced Strategy (Recommended)
 python train_overfitting_recovery.py \
     --data_root /home/linux/deeplabv3/Deeplabv3/datasets/data \
-    --checkpoint pc_airlab_best_model.pth \
+    --checkpoint checkpoints/sweep_lr5.00e-04_weight6.5_epoch_040_miou_0.5045.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "PC_airlab_Balanced_Recovery" \
     --recovery_strategy balanced \
@@ -405,7 +405,7 @@ python train_overfitting_recovery.py \
 # PC 1: Aggressive Strategy (Fast & Risky)
 python train_overfitting_recovery.py \
     --data_root /home/linux/deeplabv3_ws/DeepLabV3Plus-Pytorch/datasets/data \
-    --checkpoint pc_1_best_model.pth \
+    --checkpoint checkpoints/sweep_lr5.00e-04_weight6.5_epoch_040_miou_0.5045.pth \
     --class_weights_file class_weights/class_weight_old_data.pth \
     --experiment_name "PC_1_Aggressive_Recovery" \
     --recovery_strategy aggressive \
