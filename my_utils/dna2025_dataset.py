@@ -14,6 +14,7 @@ from glob import glob
 from PIL import Image
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as F
+# Advanced augmentation imports removed - using Albumentations instead
 
 
 class ExtSegmentationTransform:
@@ -142,7 +143,8 @@ class DNA2025Dataset(Dataset):
     ], dtype=np.uint8)
     
     def __init__(self, root_dir, crop_size, subset, scale_range=None, random_seed=1, subset_ratio=1.0,
-                 horizontal_flip_p=0.5, brightness_limit=0.2, contrast_limit=0.2, rotation_limit=10):
+                 horizontal_flip_p=0.5, brightness_limit=0.2, contrast_limit=0.2, rotation_limit=10,
+                 custom_transform=None):
         """
         Args:
             root_dir: Root directory of the dataset
@@ -151,6 +153,11 @@ class DNA2025Dataset(Dataset):
             scale_range: Range for random scaling (only for training)
             random_seed: Random seed for reproducibility
             subset_ratio: Ratio of dataset to use (0.0-1.0, default: 1.0 for full dataset)
+            horizontal_flip_p: Probability of horizontal flip (0.0-1.0)
+            brightness_limit: Brightness adjustment limit (0.0-1.0)
+            contrast_limit: Contrast adjustment limit (0.0-1.0)
+            rotation_limit: Rotation angle limit in degrees
+            custom_transform: Custom transform (e.g., Albumentations)
         """
         self.crop_size = crop_size
         self.root_dir = root_dir
@@ -220,12 +227,18 @@ class DNA2025Dataset(Dataset):
             f"No images found for {subset} subset in {split_dir} directory"
         
         # Set transforms
-        if subset == 'train' and scale_range is not None:
+        # Set up transform
+        if custom_transform is not None:
+            # Use custom transform (e.g., Albumentations)
+            self.transform = custom_transform
+        elif subset == 'train' and scale_range is not None:
+            # Use basic segmentation transform (advanced augmentation moved to Albumentations)
             self.transform = ExtSegmentationTransform(
                 crop_size, scale_range, 
                 horizontal_flip_p, brightness_limit, contrast_limit, rotation_limit
             )
         else:
+            # Use basic validation transform
             self.transform = ExtValidationTransform(crop_size)
         
         print(f"Successfully loaded {len(self.image_paths)} {subset} images\n")

@@ -1,0 +1,138 @@
+# Sweep Albumentations advanced augmentation parameters with optimized hyperparameters
+# Albumentations 고급 증강 기법 파라미터를 Sweep으로 최적화
+
+program: train_albumentations_augmentation.py
+method: bayes  # Bayesian optimization으로 효율적 탐색
+project: "deeplabv3-segmentation"
+name: "Albumentations Advanced Augmentation Optimization Sweep"
+
+metric:
+  goal: maximize
+  name: "[Val] Mean IoU"
+
+# Hyperband를 사용한 조기 종료 (코드의 early stopping과 충돌 방지)
+early_terminate:
+  type: hyperband
+  min_iter: 20  # 최소 20 에폭은 실행 후 성능 기반으로 중단
+
+parameters:
+  # Albumentations 고급 증강 파라미터들
+  use_weather:
+    values: [true, false]
+    
+  weather_p:
+    distribution: uniform
+    min: 0.2
+    max: 0.3
+
+  use_noise:
+    values: [true, false]
+    
+  noise_p:
+    distribution: uniform
+    min: 0.2
+    max: 0.3
+
+  use_blur:
+    values: [true, false]
+    
+  blur_p:
+    distribution: uniform
+    min: 0.2
+    max: 0.4
+
+  use_cutout:
+    values: [true, false]
+    
+  cutout_p:
+    distribution: uniform
+    min: 0.2
+    max: 0.4
+
+  use_geometric:
+    values: [true, false]
+    
+  geometric_p:
+    distribution: uniform
+    min: 0.3
+    max: 0.5
+
+  use_color:
+    values: [true, false]
+    
+  color_p:
+    distribution: uniform
+    min: 0.3
+    max: 0.5
+
+  # 기본 증강 파라미터 (고정)
+  horizontal_flip_p:
+    value: 0.5
+    
+  brightness_limit:
+    value: 0.2
+    
+  contrast_limit:
+    value: 0.2
+    
+  rotation_limit:
+    value: 5
+
+  # 학습률도 함께 최적화
+  lr:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+
+  weight_decay:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-3
+
+  # 고정값
+  epochs:
+    value: 30
+  batch_size:
+    value: 4
+  val_batch_size:
+    value: 4
+  crop_size:
+    value: 1024
+
+  # Dataset and model settings
+  data_root:
+    value: "./datasets/data"
+  ckpt:
+    value: "checkpoints/weighted_ce_sweep_optim/sweep_CE_best_model.pth"
+  class_weights_file:
+    value: "class_weights/dna2025dataset_sqrt_inv_freq_nc19.pth"
+
+  # Experiment settings
+  experiment_name:
+    value: "albumentations_advanced_augmentation_sweep"
+
+  # WandB settings
+  wandb_project:
+    value: "deeplabv3-segmentation"
+  wandb_name:
+    value: "Albumentations Advanced Augmentation Sweep"
+  wandb_notes:
+    value: "Sweep Albumentations advanced augmentation parameters: weather, noise, blur, cutout, geometric, color"
+  wandb_tags:
+    value: "albumentations,advanced_augmentation,sweep,bayesian_optimization"
+
+  # Training flags (Hyperband 사용으로 early stopping 비활성화)
+  early_stop_patience:
+    value: 100  # 매우 큰 값으로 설정하여 사실상 비활성화
+  early_stop_min_delta:
+    value: 0.001
+  early_stop_metric:
+    value: "Mean IoU"
+
+  # Use subset for faster experimentation
+  subset_ratio:
+    value: 0.3
+
+  # Scheduler
+  scheduler_type:
+    value: "cosine"
