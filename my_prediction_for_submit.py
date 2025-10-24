@@ -256,7 +256,6 @@ if __name__ == "__main__":
     test(args)
 
 # python my_prediction_for_submit.py \
-#     --dataset_dir /mnt/c/Users/user/Desktop/eogus/dataset/2025dna/SemanticDatasetTest \
-#     --weight_path checkpoints/PC2_Final_Advanced_Augmentation_3/sweep_lr5.00e-04_weight6.5_epoch_040_miou_0.5045.pth \
-#     --result_dir ./results_final_train1
-
+#     --dataset_dir ./datasets/data/SemanticDatasetTest \
+#     --weight_path ./checkpoints/sweep_lr8.00e-06_weight3.5_best_model2.pth \
+#     --result_dir ./results_1024

@@ -1578,3 +1578,5 @@ if __name__ == "__main__":
 #     --use_color True \
 #     --color_p 0.4 \
 #     --subset_ratio 1.0
+
+# python train_full_dataset.py --data_root './datasets/data' --ckpt './checkpoints/sweep_lr5.00e-04_weight6.5_epoch_040_miou_0.5045.pth' --class_weights_file 'class_weights/class_weight_old_data.pth' --experiment_name train_full_epoch --use_combined_dataset --subset_ratio 0.4 --epochs 200 --lr 8e-06 --batch_size 2 --val_batch_size 4 --weight_decay 0.0003 --target_max_ratio 3.5 --optimizer adamw --warmup_epochs 8 --warmup_start_lr 8e-07 --warmup_scheduler cosine --crop_size 1024 --wandb_project 'deeplabv3-segmentation' --wandb_name 'train_full_epoch' --wandb_notes "train after finishing competition" --early_stop True --early_stop_patience 15 --use_weather True --weather_p 0.4 --use_blur True --blur_p 0.4 --use_cutout True --cutout_p 0.3 --use_geometric True --geometric_p 0.3 --use_color True --color_p 0.4 --enable_vis --vis_num_samples 2 --wandb_tags train_200_epoch --horizontal_flip_p 0.5 --brightness_limit 0.2 --contrast_limit 0.2 --rotation_limit 10

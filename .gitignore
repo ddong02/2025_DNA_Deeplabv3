@@ -21,18 +21,4 @@ overlay_output/
 class_weights/class_weight_new.pth
 results_deeplabv3_optimized_ce/
 results_final_train1/
-checkpoints/sweep_lr1.00e-04_weight6.5_best_model.pth
-checkpoints/albumentations_advanced_augmentation_sweep
-checkpoints/augmentation_intensity_sweep
-checkpoints/basic_augmentation_sweep
-checkpoints/ce_only2
-checkpoints/focal_loss_sweep_optim
-checkpoints/PC2_Final_Advanced_Augmentation_3
-checkpoints/PC_main_Conservative_Recovery_recovery_stage1
-checkpoints/baseline
-checkpoints/basic_augmentation_sweep
-checkpoints/weighted_ce_sweep_optim
-checkpoints/basic_augment_train
-checkpoints/Focal Loss with ReduceLROnPlateau Scheduler
-checkpoints/PC1_Final_Basic_Augmentation
-checkpoints/PC3_Final_Hybrid_Augmentation
+checkpoints/
